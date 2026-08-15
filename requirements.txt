@@ -1,0 +1,39 @@
+# Smart Callender - Gestion des Emplois du Temps Universitaires
+# Fichier des dépendances Python pour l'application Flask
+
+# Framework Web
+Flask>=3.0.0
+Werkzeug>=3.0.0
+
+# ORM et Base de données
+Flask-SQLAlchemy>=3.1.0
+Flask-Migrate>=4.0.0
+
+# Authentification et sécurité
+Flask-Login>=0.6.3
+Flask-Bcrypt>=1.0.1
+
+# Formulaires
+Flask-WTF>=1.2.1
+WTForms>=3.1.0
+email-validator>=2.1.0
+
+# Variables d'environnement
+python-dotenv>=1.0.0
+
+# Exports
+openpyxl>=3.1.2
+pandas>=2.1.0
+reportlab>=4.0.7
+Pillow>=10.0.0
+
+# Optimisation (moteur de planification)
+ortools>=9.8.3296
+
+# GUI & Viz
+tkcalendar>=1.6.1
+matplotlib>=3.8.0
+ttkbootstrap>=1.10.1
+
+# Utilitaires
+Babel>=2.13.0

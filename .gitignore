@@ -1,0 +1,22 @@
+# Virtual environment — do not send to professor (they create their own)
+venv/
+env/
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Local database (professor runs seed.py to create a fresh one)
+instance/*.db
+
+# Environment secrets
+.env
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
