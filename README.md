@@ -1,225 +1,142 @@
-# Smart Callender - University Timetable Management System
+# Smart Callender - Intelligent Scheduling System
 
-Smart Callender is an intelligent desktop application designed to manage university schedules. It leverages Object-Oriented Programming (OOP) principles in Python and uses a Constraint Satisfaction Problem (CSP) solver to automatically generate and optimize timetables.
+<div align="center">
+  <h3>An intelligent desktop application designed to solve complex scheduling problems for educational institutions.</h3>
+</div>
 
-The application features a "Fat Client" architecture with a native Tkinter GUI and a Flask/SQLAlchemy backend layer for data management.
+---
 
-## 🚀 Key Features
+**Smart Callender** is an automated timetable management system built for schools, high schools, and universities. By leveraging Constraint Programming (CSP) via Google OR-Tools, it automatically generates conflict-free schedules, optimizing room utilization and teacher workloads.
 
-### 1. Intelligent Scheduling (CSP)
+## 🚀 Why this exists
+
+Scheduling classes manually in any educational institution often leads to:
+- Double-booked rooms or teachers.
+- Room capacity violations (assigning a large class to a small room).
+- Ignoring teacher unavailability preferences.
+
+**Smart Callender** was built to eliminate these headaches. Simply input your resources (Teachers, Rooms, Groups) and constraints, and click **"Generate"**. The solver explores millions of possibilities to deliver a perfect, conflict-free schedule.
+
+## ✨ Key Features
+
+### 1. Intelligent Scheduling (CSP Engine)
 - **Automatic Generation**: Creates conflict-free timetables using **Google OR-Tools**.
 - **Constraint Handling**:
-  - **Hard Constraints**: No double bookings for rooms, teachers, or student groups. Room capacity must meet group size.
+  - **Hard Constraints**: No double bookings. Room capacity must meet or exceed student group size.
   - **Soft Constraints**: Optimization of resource allocation.
-- **Conflict Detection**: Real-time validation of manual changes.
+  - **Teacher Availability**: Honors specific unavailability slots requested by teachers.
 
 ### 2. Multi-Role Architecture
-The application provides tailored interfaces for three user profiles:
 
-#### 👑 Administrator
-- **Dashboard**: Real-time statistics (KPIs) on room usage, teacher load, and pending requests.
-- **Resource Management**: CRUD operations for Rooms, Teachers, Groups, and Subjects.
+#### 👑 Administrator (Administration)
+- **Dashboard**: Real-time statistics (KPIs) on room usage and teacher workload.
+- **Resource Management**: Manage Rooms, Teachers, Classes/Groups, and Subjects.
 - **Schedule Management**: 
   - One-click automatic schedule generation.
   - Visual grid view of all schedules.
-  - **PDF Export** of timetables.
-- **Reservations**: Validate or refuse room reservation requests from teachers.
+  - **PDF Export** of timetables for easy distribution.
+  - Validate or refuse room reservation requests.
 
 #### 🎓 Teacher
 - **Personal Planning**: View their own weekly schedule.
-- **Room Reservation**: Submit requests for specific dates/times (e.g., makeup classes).
-- **Unavailability**: Declare recurring unavailable slots (e.g., "Not available Monday mornings") which the scheduler respects.
-- **Search**: Find free rooms for spontaneous needs.
+- **Room Reservation**: Submit requests for specific dates/times (e.g., makeup classes, extra sessions).
+- **Unavailability**: Declare recurring unavailable slots which the scheduler will respect during the next generation cycle.
 
 #### 🎒 Student
-- **Group Planning**: View the schedule for their assigned group.
+- **Group Planning**: View the schedule for their assigned class/group.
 - **Room Search**: Find available rooms for group study or revision.
+
+---
+
+## 📸 Screenshots
+
+*(Add screenshots of the Dashboard, Timetable Grid, and Generation feature here)*
 
 ---
 
 ## 🛠 Technologies Used
 
-### Core Logic & Backend
-- **Python 3.10+**: Core language.
-- **Flask**: Used as an Application Framework (Dependency Injection, Config).
-- **SQLAlchemy**: ORM for database interactions.
-- **SQLite**: Local database storage.
+- **Python 3.10+**: Core logic and scripting.
 - **Google OR-Tools**: CP-SAT solver for the scheduling engine.
-
-### Graphical User Interface (GUI)
-- **Tkinter**: Native Python GUI toolkit.
-- **Tkinter.ttk**: Themed widgets for a modern look.
-- **tkcalendar**: Date pickers for reservation forms.
-- **Matplotlib**: Embedded charts for statistics.
-
-### Utilities
-- **ReportLab**: PDF generation.
-- **Pandas**: Data handling for exports.
+- **Flask & SQLAlchemy**: Application framework (dependency injection) and ORM.
+- **SQLite**: Lightweight local database storage.
+- **Tkinter & ttk**: Native, responsive desktop GUI.
+- **ReportLab**: PDF report generation.
+- **Matplotlib**: Embedded data visualization.
 
 ---
 
-## 📂 Project Structure
-
-```text
-smart-callender/
-├── app/
-│   ├── models/           # Database Models (OOP)
-│   │   ├── utilisateur.py   # User & Roles
-│   │   ├── seance.py        # Schedule Session
-│   │   ├── salle.py         # Room Resource
-│   │   └── ...
-│   ├── services/         # Business Logic Layer
-│   │   ├── auth_service.py      # Login/Auth Logic
-│   │   ├── resource_service.py  # CRUD Operations
-│   │   └── scheduler.py         # OR-Tools CSP Engine
-│   ├── gui/              # Presentation Layer (Tkinter)
-│   │   ├── main.py          # Main Window & Router
-│   │   ├── auth.py          # Login Screen
-│   │   ├── admin.py         # Admin Dashboard
-│   │   ├── teacher.py       # Teacher Portal
-│   │   └── student.py       # Student Portal
-│   ├── __init__.py       # App Factory
-│   └── extensions.py     # DB, Migration, Login Setup
-├── scripts/              # Utility & maintenance scripts
-│   └── seed_db.py         # Original DB seeding logic
-├── instance/             # Local Database Storage
-├── my_config.py          # App configuration (DB URL, secret key, etc.)
-├── desktop_run.py        # Application Entry Point
-├── seed.py               # Database Initialization Script (calls scripts/seed_db logic)
-└── requirements.txt      # Dependency List
-```
-
----
-
-## ⚡ How to Run (with venv)
-
-The application runs with **Python in a virtual environment (venv)**. Use these steps yourself or share them with your professor.
+## ⚡ Installation & Quick Start
 
 ### 1. Prerequisites
 - **Python 3.10+** installed.
 
-### 2. Create and activate a virtual environment
+### 2. Clone and Setup Environment
+
+Clone the repository and set up a virtual environment:
 
 **Windows (PowerShell):**
 ```powershell
-cd path\to\smart-callender
+git clone https://github.com/yourusername/smart-callender.git
+cd smart-callender
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 ```
 
-**Windows (CMD):**
-```cmd
-cd path\to\smart-callender
-python -m venv venv
-venv\Scripts\activate.bat
-```
-
 **Linux / macOS:**
 ```bash
-cd path/to/smart-callender
+git clone https://github.com/yourusername/smart-callender.git
+cd smart-callender
 python3 -m venv venv
 source venv/bin/activate
 ```
 
 ### 3. Install dependencies
-With the venv activated:
-
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Initialize the database
-Run the seed script to create the database and sample data (admin, teachers, rooms, etc.):
+### 4. Initialize the Demo Database
+Run the seed script to create the database and inject sample data (perfect for testing the CSP engine):
 
 ```bash
 python seed.py
 ```
 
-### 5. Launch the application
-Start the desktop application:
-
+### 5. Launch the Application
 ```bash
 python desktop_run.py
 ```
 
-### 6. User credentials (from `seed.py`)
+### 6. Demo Credentials
 
-After running `python seed.py`, you can log in with these accounts:
+If you ran `python seed.py`, you can log in with the following demo accounts:
 
-| Role       | Email                   | Password  | Note                          |
-|------------|-------------------------|-----------|-------------------------------|
-| Admin      | `admin@test.com`        | `password`| Administrator                 |
-| Teacher    | `benjelloun@univ.ma`    | `password`| Prof. Math (SMI)              |
-| Teacher    | `elamrani@univ.ma`      | `password`| Prof. Info (SMI)              |
-| Student    | `etudiant.smi@univ.ma`  | `password`| Student in SMI S1             |
-
-**To share with your professor (do not send the whole folder with venv):**
-
-1. **Create a zip without venv:** Double-click `prepare_zip_for_professor.bat` (or run `prepare_zip_for_professor.ps1` in PowerShell). This creates `SmartCallender_pour_prof.zip` in the parent folder (e.g. Desktop), excluding `venv`, `__pycache__`, and the local database.
-2. Send the zip file to the professor (email, USB, etc.).
-3. Give them the short instructions in `POUR_LE_PROFESSEUR.txt` (or point them to this README). They unzip, then: create venv → activate → `pip install -r requirements.txt` → `python seed.py` → `python desktop_run.py`.
+| Role       | Email                      | Password  | Note                          |
+|------------|----------------------------|-----------|-------------------------------|
+| Admin      | `admin@school.edu`         | `password`| Administrator dashboard       |
+| Teacher    | `prof.math@school.edu`     | `password`| Math Teacher                  |
+| Student    | `student.grade10@school.edu`| `password`| 10th Grade Student            |
 
 ---
 
 ## 🧠 How the Scheduling Works
 
-The `SchedulerService` (`app/services/scheduler.py`) transforms the timetable problem into a mathematical model:
+The engine (`app/services/scheduler.py`) transforms the timetable problem into a mathematical model:
 
-1.  **Variables**: Every potential class session is a variable that needs to be assigned a `(Room, TimeSlot)`.
+1.  **Variables**: Every potential class session needs a `(Room, TimeSlot)`.
 2.  **Constraints**:
     *   `Sum(Sessions for Teacher T at Time H) <= 1`
     *   `Sum(Sessions in Room R at Time H) <= 1`
-    *   `Sum(Sessions for Group G at Time H) <= 1`
-    *   `Room Capacity >= Group Size`
+    *   `Sum(Sessions for Class C at Time H) <= 1`
+    *   `Room Capacity >= Class Size`
     *   `Teacher Unavailability != TimeSlot`
-3.  **Solver**: The CP-SAT solver explores millions of possibilities to find a feasible solution that satisfies all constraints, then saves the result to the database.
+3.  **Solver**: The CP-SAT solver explores the search space to find a feasible solution satisfying all constraints, saving the result to the local SQLite database.
 
----
+## 🤝 Contributing
 
-## 📘 Understanding the CSP Engine
+Contributions are welcome! Feel free to submit a Pull Request or open an Issue if you have ideas on how to improve the scheduling algorithms, UI, or overall architecture.
 
-**CSP** stands for **Constraint Satisfaction Problem**. It is a mathematical approach used to solve problems where you have a set of **variables** that must be assigned **values**, but those assignments must obey a set of strict **constraints** (rules).
+## 📄 License
 
-Think of it like a Sudoku puzzle:
-- **Variables**: The empty cells you must fill.
-- **Domain**: The possible values (e.g. numbers 1–9).
-- **Constraints**: No duplicate in any row, column, or 3×3 box.
-
-### How the CSP engine works in this app
-
-The scheduler uses **Google OR-Tools** (`app/services/scheduler.py`).
-
-1. **Variables (what we decide)**  
-   For each **session** (e.g. “Math for Group A with Prof. Turing”), the engine creates variables to decide:
-   - **TimeSlot**: When it happens (e.g. Monday 8:30).
-   - **Room**: Where it happens (e.g. Room 101).
-
-2. **Constraints (the rules)**  
-   The engine is told what is allowed and what is forbidden:
-   - **Teacher conflict**: A teacher cannot be in two rooms at the same time.
-   - **Room conflict**: A room cannot host two sessions at the same time.
-   - **Group conflict**: A student group cannot have two sessions at the same time.
-   - **Capacity**: Room capacity must be at least the group size.
-   - **Unavailability**: If a teacher marks “Monday morning” as unavailable, those slots are forbidden for that teacher.
-
-3. **Solver**  
-   When you click “Generate”, the solver explores many possible combinations, discards those that violate any constraint, and returns a valid assignment (if one exists). That result is then saved to the database.
-
----
-
-## 📁 Why These Files Exist
-
-### `my_config.py`
-
-This file holds the **configuration** of the application (database URL, secret key, debug mode, etc.).
-
-- **Why it exists**: Flask needs a single place to read settings such as where the database is, whether debug is on, and security keys.
-- **Why the name**: The usual name is `config.py`. Here it is `my_config.py` to avoid import conflicts with other modules or system paths (e.g. on Windows), so the app always loads the right configuration.
-- **What’s inside**: For example `SQLALCHEMY_DATABASE_URI` (path to `smart_callender.db`), `SECRET_KEY`, and options like `SLOT_DURATION_MINUTES` for the scheduler.
-
-### `scripts/`
-
-This folder is for **utility and maintenance scripts**, separate from the main application code in `app/`.
-
-- **Purpose**: Keeps helper scripts (seeding, backups, resets) out of the core app and makes the project structure clearer.
-- **Content**: `seed_db.py` contains the original logic to create and fill the database (admin, teachers, rooms, etc.). The root-level `seed.py` calls this logic so you can run `python seed.py` easily; keeping `scripts/` allows you to add other scripts later (e.g. `reset_db.py`, `backup_db.py`) without cluttering the project root.
+This project is open-source and available under the [MIT License](LICENSE).
