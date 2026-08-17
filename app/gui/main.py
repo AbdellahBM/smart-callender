@@ -22,7 +22,8 @@ class DesktopApp:
         self.app_context.push()
 
         # Premier lancement : créer les tables et garantir les réglages d'école.
-        self.startup_hint = self._ensure_db_bootstrap()
+        self.startup_message = self._ensure_db_bootstrap()
+        self.startup_hint = self.startup_message
 
         self.current_frame = None
         self.user = None

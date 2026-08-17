@@ -5,6 +5,7 @@ from app.services.resource_service import ResourceService
 from app.services.auth_service import AuthService
 from app.extensions import db
 from app.models import Reservation
+from app.models.utilisateur import Utilisateur
 from app.services.settings_service import SchoolSettingsService
 
 class AdminDashboard(ttk.Frame):
@@ -56,6 +57,12 @@ class AdminDashboard(ttk.Frame):
         # Charger le module planning
         from app.gui.schedule_ui import ScheduleFrame
         ScheduleFrame(self.tab_planning, controller).pack(fill="both", expand=True)
+
+    def _selected_tree_values(self, tree):
+        selected = tree.selection()
+        if not selected:
+            return None
+        return tree.item(selected[0], "values")
 
     def setup_dashboard(self):
         # KPIs Container
@@ -140,6 +147,7 @@ class AdminDashboard(ttk.Frame):
         btn_frame = ttk.Frame(self.tab_salles)
         btn_frame.pack(fill="x", pady=(0, 10))
         ttk.Button(btn_frame, text="+ Ajouter Salle", command=self.add_salle, bootstyle="success").pack(side="left")
+        ttk.Button(btn_frame, text="✏️ Modifier", command=self.edit_selected_salle, bootstyle="warning").pack(side="left", padx=5)
         ttk.Button(btn_frame, text="🗑 Supprimer Salle", command=self.delete_selected_salle, bootstyle="danger").pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Rafraîchir", command=self.refresh_salles, bootstyle="info-outline").pack(side="left", padx=5)
         
@@ -172,6 +180,36 @@ class AdminDashboard(ttk.Frame):
         })
         self.refresh_salles()
 
+    def edit_selected_salle(self):
+        values = self._selected_tree_values(self.tree_salles)
+        if not values:
+            messagebox.showwarning("Attention", "Sélectionnez une salle.")
+            return
+
+        salle_id = int(values[0])
+        nom = simpledialog.askstring("Modifier Salle", "Nom:", initialvalue=str(values[1]).strip())
+        if nom is None:
+            return
+        capacite = simpledialog.askinteger("Modifier Salle", "Capacité:", initialvalue=int(values[3]) if str(values[3]).isdigit() else 30)
+        if capacite is None:
+            return
+        type_salle = simpledialog.askstring("Modifier Salle", "Type (cours, tp, amphi):", initialvalue=str(values[2]).strip())
+        if type_salle is None:
+            return
+
+        salle = ResourceService.update_salle(
+            salle_id,
+            {
+                "nom": nom,
+                "capacite": capacite,
+                "type_salle": type_salle,
+            },
+        )
+        if not salle:
+            messagebox.showerror("Erreur", "Impossible de modifier la salle.")
+            return
+        self.refresh_salles()
+
     def delete_selected_salle(self):
         selected = self.tree_salles.selection()
         if not selected:
@@ -196,6 +234,11 @@ class AdminDashboard(ttk.Frame):
         self.tree_profs.heading("email", text="Email")
         self.tree_profs.column("id", width=50)
         self.tree_profs.pack(expand=True, fill="both")
+
+        btn_frame = ttk.Frame(self.tab_enseignants)
+        btn_frame.pack(fill="x", pady=(10, 0))
+        ttk.Button(btn_frame, text="🧩 Gérer matières", command=self.manage_teacher_matieres_from_list, bootstyle="warning").pack(side="left")
+
         self.refresh_profs()
 
     def refresh_profs(self):
@@ -217,6 +260,7 @@ class AdminDashboard(ttk.Frame):
         btn_frame = ttk.Frame(self.tab_groupes)
         btn_frame.pack(fill="x", pady=(10, 0))
         ttk.Button(btn_frame, text="➕ Ajouter un groupe", command=self.add_groupe, bootstyle="success").pack(side="left")
+        ttk.Button(btn_frame, text="✏️ Modifier", command=self.edit_selected_groupe, bootstyle="warning").pack(side="left", padx=6)
         ttk.Button(btn_frame, text="🗑 Supprimer", command=self.delete_selected_groupe, bootstyle="danger").pack(side="left", padx=6)
 
         self.refresh_groupes()
@@ -249,6 +293,50 @@ class AdminDashboard(ttk.Frame):
             messagebox.showerror("Erreur", "ID filière invalide.")
             return
         ResourceService.create_groupe(nom=nom, effectif=effectif, filiere_id=filiere_id)
+        self.refresh_groupes()
+
+    def edit_selected_groupe(self):
+        values = self._selected_tree_values(self.tree_groupes)
+        if not values:
+            messagebox.showwarning("Attention", "Sélectionnez un groupe.")
+            return
+
+        groupe_id = int(values[0])
+        filiere_nom = str(values[3]).strip()
+        filieres = ResourceService.get_all_filieres()
+        filiere_options = [f"{f.id}: {f.nom}" for f in filieres]
+        current_filiere = next((f for f in filieres if f.nom == filiere_nom), None)
+        current_filiere_id = current_filiere.id if current_filiere else None
+
+        nom = simpledialog.askstring("Modifier groupe", "Nom:", initialvalue=str(values[1]).strip())
+        if nom is None:
+            return
+        effectif = simpledialog.askinteger("Modifier groupe", "Effectif:", initialvalue=int(values[2]) if str(values[2]).isdigit() else 0)
+        if effectif is None:
+            return
+
+        if filiere_options:
+            choix = simpledialog.askstring(
+                "Modifier groupe",
+                f"Filière (id): {', '.join(filiere_options)}",
+                initialvalue=f"{current_filiere_id}: {filiere_nom}" if current_filiere else "",
+            )
+            if not choix:
+                messagebox.showerror("Erreur", "Une filière est obligatoire.")
+                return
+            try:
+                filiere_id = int(choix.split(\":\")[0].strip())
+            except (ValueError, IndexError):
+                messagebox.showerror("Erreur", "ID filière invalide.")
+                return
+        else:
+            messagebox.showwarning("Attention", "Aucune filière disponible.")
+            return
+
+        if not ResourceService.update_groupe(groupe_id, {"nom": nom, "effectif": effectif, "filiere_id": filiere_id}):
+            messagebox.showerror("Erreur", "Impossible de modifier ce groupe.")
+            return
+
         self.refresh_groupes()
 
     def delete_selected_groupe(self):
@@ -292,6 +380,9 @@ class AdminDashboard(ttk.Frame):
         ttk.Button(btn_frame, text="➕ Ajouter étudiant", command=self.add_etudiant, bootstyle="success").pack(side="left", padx=(0, 6))
         ttk.Button(btn_frame, text="🗑 Supprimer", command=self.delete_selected_user, bootstyle="danger").pack(side="left")
         ttk.Button(btn_frame, text="✅ Activer/Désactiver", command=self.toggle_selected_user, bootstyle="warning").pack(side="left", padx=(6, 0))
+        ttk.Button(btn_frame, text="✏️ Modifier", command=self.edit_selected_user, bootstyle="info").pack(side="left", padx=(6, 0))
+        ttk.Button(btn_frame, text="🔑 Réinitialiser mdp", command=self.reset_user_password, bootstyle="secondary").pack(side="left", padx=(6, 0))
+        ttk.Button(btn_frame, text="🧩 Matières", command=self.manage_teacher_matieres, bootstyle="secondary").pack(side="left", padx=(6, 0))
         self.refresh_utilisateurs()
 
     def refresh_utilisateurs(self):
@@ -370,6 +461,102 @@ class AdminDashboard(ttk.Frame):
         except Exception as exc:
             messagebox.showerror("Erreur", str(exc))
 
+    def _ask_role(self, default_role):
+        role = simpledialog.askstring("Modifier un utilisateur", "Rôle (admin/enseignant/etudiant):", initialvalue=default_role)
+        if role is None:
+            return None
+        role = role.strip().lower()
+        if role not in Utilisateur.ROLES:
+            messagebox.showerror("Erreur", "Rôle invalide.")
+            return None
+        return role
+
+    def edit_selected_user(self):
+        values = self._selected_tree_values(self.tree_users)
+        if not values:
+            messagebox.showwarning("Attention", "Sélectionnez un utilisateur.")
+            return
+
+        user_id = int(values[0])
+        current_role = values[4]
+        if user_id == self.user.id:
+            messagebox.showwarning("Attention", "Vous ne pouvez pas modifier votre propre compte depuis cette liste.")
+            return
+
+        user_entity = AuthService.get_by_id(user_id)
+        if not user_entity:
+            messagebox.showerror("Erreur", "Utilisateur introuvable.")
+            return
+
+        nom = simpledialog.askstring("Modifier un utilisateur", "Nom:", initialvalue=str(values[1]).strip())
+        if nom is None:
+            return
+        prenom = simpledialog.askstring("Modifier un utilisateur", "Prénom:", initialvalue=str(values[2]).strip())
+        if prenom is None:
+            return
+        email = simpledialog.askstring("Modifier un utilisateur", "Email:", initialvalue=str(values[3]).strip())
+        if email is None:
+            return
+        role = self._ask_role(current_role)
+        if role is None:
+            return
+
+        groupe_id = None
+        if role == "etudiant":
+            groupes = ResourceService.get_all_groupes()
+            options = [f"{g.id}: {g.nom}" for g in groupes]
+            if not options:
+                messagebox.showwarning("Attention", "Aucun groupe disponible. Créez d'abord un groupe.")
+                return
+            selected_group = simpledialog.askstring(
+                "Groupe étudiant",
+                f"Groupe (id): {', '.join(options)}",
+                initialvalue=f"{user_entity.groupe_id}: {user_entity.groupe.nom}" if user_entity.groupe_id else "",
+            )
+            if not selected_group:
+                messagebox.showerror("Erreur", "Un groupe est obligatoire pour un étudiant.")
+                return
+            try:
+                groupe_id = int(selected_group.split(\":\")[0].strip())
+            except (ValueError, IndexError):
+                messagebox.showerror("Erreur", "ID de groupe invalide.")
+                return
+
+        try:
+            AuthService.update_user(
+                user_id=user_id,
+                nom=nom,
+                prenom=prenom,
+                email=email,
+                role=role,
+                groupe_id=groupe_id,
+            )
+            self.refresh_utilisateurs()
+            self.refresh_profs()
+            self.refresh_groupes()
+        except Exception as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def reset_user_password(self):
+        values = self._selected_tree_values(self.tree_users)
+        if not values:
+            messagebox.showwarning("Attention", "Sélectionnez un utilisateur.")
+            return
+
+        user_id = int(values[0])
+        if user_id == self.user.id:
+            messagebox.showwarning("Attention", "Vous ne pouvez pas réinitialiser votre propre mot de passe ici.")
+            return
+
+        new_password = simpledialog.askstring("Réinitialiser le mot de passe", "Nouveau mot de passe:", show="*")
+        if not new_password:
+            return
+
+        if AuthService.reset_password(user_id, new_password):
+            messagebox.showinfo("Succès", "Mot de passe mis à jour.")
+        else:
+            messagebox.showerror("Erreur", "Impossible de modifier le mot de passe.")
+
     def delete_selected_user(self):
         selected = self.tree_users.selection()
         if not selected:
@@ -430,6 +617,7 @@ class AdminDashboard(ttk.Frame):
         btn_frame = ttk.Frame(frame)
         btn_frame.pack(fill="x", pady=(10, 0))
         ttk.Button(btn_frame, text="🗑 Supprimer sélection", command=self.delete_selected_class_item, bootstyle="danger").pack(side="left")
+        ttk.Button(btn_frame, text="✏️ Modifier sélection", command=self.edit_selected_class_item, bootstyle="warning").pack(side="left", padx=(6, 0))
 
         self.refresh_classes()
 
@@ -493,6 +681,114 @@ class AdminDashboard(ttk.Frame):
                 self.refresh_groupes()
         self.refresh_classes()
         self.refresh_groupes()
+
+    def edit_selected_class_item(self):
+        selected = self.tree_classes.selection()
+        if not selected:
+            messagebox.showwarning("Attention", "Sélectionnez un élément.")
+            return
+
+        selected_value = self.tree_classes.item(selected[0], "values")
+        if not selected_value:
+            return
+
+        prefix = str(selected_value[0])
+        if prefix.startswith("f-"):
+            filiere_id = int(prefix.replace("f-", ""))
+            nom = simpledialog.askstring("Modifier une filière", "Nom :", initialvalue=str(selected_value[1]).strip())
+            if nom is None:
+                return
+            code = simpledialog.askstring("Modifier une filière", "Code :", initialvalue=str(selected_value[3]).strip())
+            if code is None:
+                return
+            if not ResourceService.update_filiere(filiere_id, {"nom": nom, "code": code}):
+                messagebox.showerror("Erreur", "Impossible de modifier cette filière.")
+                return
+            self.refresh_classes()
+            self.refresh_groupes()
+            return
+
+        if prefix.startswith("m-"):
+            matiere_id = int(prefix.replace("m-", ""))
+            nom = simpledialog.askstring("Modifier une matière", "Nom :", initialvalue=str(selected_value[1]).strip())
+            if nom is None:
+                return
+            code = simpledialog.askstring("Modifier une matière", "Code :", initialvalue=str(selected_value[3]).strip())
+            if code is None:
+                return
+
+            if not ResourceService.update_matiere(matiere_id, {"nom": nom, "code": code}):
+                messagebox.showerror("Erreur", "Impossible de modifier cette matière.")
+                return
+            self.refresh_classes()
+            return
+
+    def manage_teacher_matieres_from_list(self):
+        values = self._selected_tree_values(self.tree_profs)
+        if not values:
+            messagebox.showwarning("Attention", "Sélectionnez un enseignant.")
+            return
+        user_id = int(values[0])
+        self.manage_teacher_matieres(user_id)
+
+    def manage_teacher_matieres(self, user_id_or_self=None):
+        if user_id_or_self is None:
+            values = self._selected_tree_values(self.tree_users)
+            if not values:
+                messagebox.showwarning("Attention", "Sélectionnez un utilisateur.")
+                return
+            user_id = int(values[0])
+        else:
+            user_id = int(user_id_or_self)
+
+        teacher = AuthService.get_by_id(user_id)
+        if not teacher:
+            messagebox.showerror("Erreur", "Utilisateur introuvable.")
+            return
+        if teacher.role != "enseignant":
+            messagebox.showwarning("Attention", "Vous pouvez gérer les matières uniquement pour un enseignant.")
+            return
+
+        all_matieres = ResourceService.get_all_matieres()
+        if not all_matieres:
+            messagebox.showwarning("Attention", "Aucune matière disponible.")
+            return
+
+        assigned = set(AuthService.get_teacher_matiere_ids(teacher.id))
+        options = [f"{m.id}: {m.nom}" for m in all_matieres]
+        current = ", ".join(f"{m.id}: {m.nom}" for m in all_matieres if m.id in assigned)
+
+        answer = simpledialog.askstring(
+            "Gestion matières enseignant",
+            f"Sélectionnez les IDs matières séparés par des virgules.\nActuelles: {current}\n{', '.join(options)}",
+            initialvalue=",".join(str(i) for i in sorted(assigned)),
+        )
+        if answer is None:
+            return
+
+        if not answer.strip():
+            if messagebox.askyesno("Confirmation", "Aucune matière choisie: effacer toutes les affectations ?"):
+                try:
+                    if AuthService.set_teacher_matieres(teacher.id, []):
+                        messagebox.showinfo("Succès", "Affectations mises à jour.")
+                except Exception as exc:
+                    messagebox.showerror("Erreur", str(exc))
+            return
+
+        parts = [part.strip() for part in answer.split(",")]
+        try:
+            matiere_ids = [int(part) for part in parts if part]
+        except ValueError:
+            messagebox.showerror("Erreur", "Les IDs doivent être des nombres séparés par des virgules.")
+            return
+
+        try:
+            if AuthService.set_teacher_matieres(teacher.id, matiere_ids):
+                messagebox.showinfo("Succès", "Affectations mises à jour.")
+            else:
+                messagebox.showerror("Erreur", "Impossible de mettre à jour les matières.")
+        except Exception as exc:
+            messagebox.showerror("Erreur", str(exc))
 
     # --- Paramètres planning ---
     def setup_parametres(self):
