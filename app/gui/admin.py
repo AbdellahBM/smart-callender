@@ -1,6 +1,7 @@
+import csv
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
-from tkinter import messagebox, simpledialog
+from tkinter import filedialog, messagebox, simpledialog
 from datetime import datetime
 from app.services.resource_service import ResourceService
 from app.services.auth_service import AuthService
@@ -1235,7 +1236,9 @@ class AdminDashboard(ttk.Frame):
         toolbar = ttk.Frame(frame)
         toolbar.pack(fill="x", pady=(0, 10))
         ttk.Button(toolbar, text="🔄 Rafraîchir", command=self.refresh_audit, bootstyle="info").pack(side="left")
+        ttk.Button(toolbar, text="📤 Exporter CSV", command=self.export_audit_csv, bootstyle="success").pack(side="left", padx=(6, 0))
         ttk.Button(toolbar, text="🧹 Vider", command=self.clear_audit, bootstyle="danger").pack(side="left", padx=(6, 0))
+        ttk.Button(toolbar, text="🗑 Purger...", command=self.purge_audit, bootstyle="secondary").pack(side="left", padx=(6, 0))
 
         columns = ("id", "date", "admin", "action", "type", "entity_id", "details")
         self.tree_audit = ttk.Treeview(frame, columns=columns, show="headings", bootstyle="info")
@@ -1283,10 +1286,55 @@ class AdminDashboard(ttk.Frame):
         if not messagebox.askyesno("Confirmer", "Supprimer tous les logs d'audit ?"):
             return
         try:
-            for log in AdminAuditService.get_recent(5000):
-                db.session.delete(log)
-            db.session.commit()
+            deleted = AdminAuditService.purge_all()
+            self._record_admin_action("audit.cleared", "audit", None, f"total={deleted}")
             self.refresh_audit()
         except Exception as exc:
-            db.session.rollback()
+            messagebox.showerror("Erreur", str(exc))
+
+    def purge_audit(self):
+        days = simpledialog.askinteger("Purger le journal", "Supprimer les logs plus anciens que X jours :")
+        if days is None:
+            return
+        try:
+            deleted = AdminAuditService.purge_older_than(days)
+            self._record_admin_action("audit.purged", "audit", None, f"older_than_days={days}, removed={deleted}")
+            messagebox.showinfo("Succès", f"{deleted} logs supprimés.")
+            self.refresh_audit()
+        except Exception as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def export_audit_csv(self):
+        output_path = filedialog.asksaveasfilename(
+            title="Exporter le journal d'audit",
+            defaultextension=".csv",
+            filetypes=[("Fichier CSV", "*.csv"), ("Tous les fichiers", "*.*")],
+            initialfile=f"audit_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        )
+        if not output_path:
+            return
+        try:
+            logs = AdminAuditService.get_for_export(10000)
+            with open(output_path, "w", newline="", encoding="utf-8") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(["ID", "Date", "Admin ID", "Admin", "Action", "Entity type", "Entity ID", "Details"])
+                for log in logs:
+                    admin_name = ""
+                    if log.admin:
+                        admin_name = f"{log.admin.nom} {log.admin.prenom} ({log.admin.email})"
+                    writer.writerow(
+                        [
+                            log.id,
+                            log.created_at.strftime("%Y-%m-%d %H:%M:%S") if log.created_at else "",
+                            log.admin_id or "",
+                            admin_name,
+                            log.action,
+                            log.entity_type or "",
+                            log.entity_id or "",
+                            log.details or "",
+                        ]
+                    )
+            self._record_admin_action("audit.exported", "audit", None, f"file={output_path}, total={len(logs)}")
+            messagebox.showinfo("Succès", "Journal exporté en CSV.")
+        except Exception as exc:
             messagebox.showerror("Erreur", str(exc))
