@@ -6,6 +6,8 @@ from app.models import Utilisateur, Salle, Matiere, Filiere, Groupe, Seance
 def seed():
     app = create_app("development")
     with app.app_context():
+        print("ATTENTION: ce script est un seed d'initialisation.")
+        print("Il réinitialise la base (suppression et recréation complète des tables).")
         print("Suppression de la base de données existante...")
         db.drop_all()
         print("Création des tables...")

@@ -15,11 +15,10 @@ class LoginFrame(ttk.Frame):
         super().__init__(parent)
         self.controller = controller
 
-        # Fond plein écran (couleur douce pour faire ressortir la carte)
         self.configure(bootstyle="light")
         self.place(relx=0, rely=0, relwidth=1, relheight=1)
 
-        # Conteneur centré pour la carte
+        # Fond plein écran (couleur douce pour faire ressortir la carte)
         center = ttk.Frame(self)
         center.place(relx=0.5, rely=0.5, anchor="center")
 
@@ -46,6 +45,20 @@ class LoginFrame(ttk.Frame):
         # Séparateur visuel
         sep = ttk.Separator(card, orient="horizontal", bootstyle="primary")
         sep.pack(fill="x", pady=(20, 24))
+
+        # Message de démarrage (orientation)
+        startup_message = getattr(controller, "startup_message", None)
+        if startup_message:
+            hint = ttk.Frame(card, padding=10)
+            hint.pack(fill="x", pady=(0, 14))
+            ttk.Label(
+                hint,
+                text=startup_message,
+                font=("Segoe UI", 9),
+                bootstyle="warning",
+                wraplength=520,
+                justify="left",
+            ).pack(fill="x")
 
         # Formulaire
         form = ttk.Frame(card)
@@ -79,7 +92,7 @@ class LoginFrame(ttk.Frame):
         demo_frame.pack(fill="x")
         ttk.Label(
             demo_frame,
-            text="Démo : admin@test.com — password",
+            text="Démo : admin@school.edu — password",
             font=("Segoe UI", 8),
             bootstyle="inverse-primary",
         ).pack()
