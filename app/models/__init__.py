@@ -7,3 +7,4 @@ from app.models.seance import Seance
 from app.models.reservation import Reservation
 from app.models.indisponibilite import Indisponibilite
 from app.models.school_setting import SchoolSetting
+from app.models.admin_action_log import AdminActionLog

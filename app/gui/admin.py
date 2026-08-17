@@ -4,6 +4,7 @@ from tkinter import messagebox, simpledialog
 from datetime import datetime
 from app.services.resource_service import ResourceService
 from app.services.auth_service import AuthService
+from app.services.admin_audit_service import AdminAuditService
 from app.extensions import db
 from app.models import Reservation, Utilisateur
 from app.services.room_service import get_occupied_salle_ids
@@ -35,6 +36,7 @@ class AdminDashboard(ttk.Frame):
         self.tab_parametres = ttk.Frame(self.notebook, padding=10)
         self.tab_utilisateurs = ttk.Frame(self.notebook, padding=10)
         self.tab_classes = ttk.Frame(self.notebook, padding=10)
+        self.tab_audit = ttk.Frame(self.notebook, padding=10)
         
         self.notebook.add(self.tab_dashboard, text="Tableau de bord")
         self.notebook.add(self.tab_planning, text="📅 Planning")
@@ -45,6 +47,7 @@ class AdminDashboard(ttk.Frame):
         self.notebook.add(self.tab_utilisateurs, text="👥 Utilisateurs")
         self.notebook.add(self.tab_classes, text="📘 Filières / Matières")
         self.notebook.add(self.tab_parametres, text="⚙️ Paramètres")
+        self.notebook.add(self.tab_audit, text="🧾 Journal")
         
         self.setup_dashboard()
         self.setup_reservations()
@@ -54,6 +57,7 @@ class AdminDashboard(ttk.Frame):
         self.setup_utilisateurs()
         self.setup_classes()
         self.setup_parametres()
+        self.setup_audit()
         
         # Charger le module planning
         from app.gui.schedule_ui import ScheduleFrame
@@ -85,6 +89,14 @@ class AdminDashboard(ttk.Frame):
         frame = ttk.Labelframe(parent, text=title, bootstyle=bootstyle, padding=20)
         ttk.Label(frame, text=str(value), font=("Helvetica", 36, "bold"), bootstyle=bootstyle).pack()
         return frame
+
+    def _record_admin_action(self, action, entity_type=None, entity_id=None, details=None):
+        if AdminAuditService.log_action(self.user, action, entity_type=entity_type, entity_id=entity_id, details=details):
+            if hasattr(self, "tree_audit"):
+                try:
+                    self.refresh_audit()
+                except Exception:
+                    pass
 
     # --- Gestion Réservations ---
     def setup_reservations(self):
@@ -213,6 +225,7 @@ class AdminDashboard(ttk.Frame):
                 comment = simpledialog.askstring("Valider réservation", "Commentaire admin (optionnel):")
                 if self._set_reservation_status(res_id, "acceptee", comment):
                     messagebox.showinfo("Succès", "Réservation acceptée.")
+                    self._record_admin_action("reservation.approved", "reservation", res_id, comment or "ok")
                     self.refresh_reservations()
             except Exception as exc:
                 messagebox.showerror("Erreur", str(exc))
@@ -226,6 +239,7 @@ class AdminDashboard(ttk.Frame):
                     return
                 if self._set_reservation_status(res_id, "refusee", comment):
                     messagebox.showinfo("Succès", "Réservation refusée.")
+                    self._record_admin_action("reservation.rejected", "reservation", res_id, comment or "ok")
                     self.refresh_reservations()
             except Exception as exc:
                 messagebox.showerror("Erreur", str(exc))
@@ -236,6 +250,7 @@ class AdminDashboard(ttk.Frame):
             try:
                 if self._set_reservation_status(res_id, "en_attente", None):
                     messagebox.showinfo("Succès", "Statut remis en attente.")
+                    self._record_admin_action("reservation.reset", "reservation", res_id, "Remettre en attente")
                     self.refresh_reservations()
             except Exception as exc:
                 messagebox.showerror("Erreur", str(exc))
@@ -253,6 +268,7 @@ class AdminDashboard(ttk.Frame):
         db.session.delete(res)
         db.session.commit()
         messagebox.showinfo("Succès", "Réservation supprimée.")
+        self._record_admin_action("reservation.deleted", "reservation", res_id, f"Salle {res.salle_id} / Enseignant {res.enseignant_id}")
         self.refresh_reservations()
 
     def edit_selected_reservation(self):
@@ -363,6 +379,12 @@ class AdminDashboard(ttk.Frame):
 
             res.statut = statut_input
             db.session.commit()
+            self._record_admin_action(
+                "reservation.updated",
+                "reservation",
+                res_id,
+                f"enseignant={enseignant_id}, salle={salle_id}, date={date_reservation}, {heure_debut}-{heure_fin}, statut={statut_input}"
+            )
             self.refresh_reservations()
             messagebox.showinfo("Succès", "Réservation mise à jour.")
         except Exception as exc:
@@ -416,18 +438,23 @@ class AdminDashboard(ttk.Frame):
                 ):
                     return
 
-            db.session.add(
-                Reservation(
-                    enseignant_id=enseignant_id,
-                    salle_id=salle_id,
-                    date_reservation=date_reservation,
-                    heure_debut=heure_debut,
-                    heure_fin=heure_fin,
-                    motif=motif_input,
-                    statut="en_attente",
-                )
+            new_reservation = Reservation(
+                enseignant_id=enseignant_id,
+                salle_id=salle_id,
+                date_reservation=date_reservation,
+                heure_debut=heure_debut,
+                heure_fin=heure_fin,
+                motif=motif_input,
+                statut="en_attente",
             )
+            db.session.add(new_reservation)
             db.session.commit()
+            self._record_admin_action(
+                "reservation.created",
+                "reservation",
+                new_reservation.id,
+                f"enseignant={enseignant_id}, salle={salle_id}, date={date_reservation}, {heure_debut}-{heure_fin}",
+            )
             self.refresh_reservations()
             messagebox.showinfo("Succès", "Réservation créée.")
         except Exception as exc:
@@ -465,11 +492,20 @@ class AdminDashboard(ttk.Frame):
         if capacite is None:
             return
         type_salle = simpledialog.askstring("Ajout Salle", "Type (cours, tp, amphi):", initialvalue="cours")
-        ResourceService.create_salle({
-            "nom": nom,
-            "capacite": capacite,
-            "type_salle": type_salle or "cours",
-        })
+        salle = ResourceService.create_salle(
+            {
+                "nom": nom,
+                "capacite": capacite,
+                "type_salle": type_salle or "cours",
+            }
+        )
+        if salle:
+            self._record_admin_action(
+                "salle.created",
+                "salle",
+                salle.id,
+                f"nom={salle.nom}, type={salle.type_salle}, capacite={salle.capacite}",
+            )
         self.refresh_salles()
 
     def edit_selected_salle(self):
@@ -500,6 +536,12 @@ class AdminDashboard(ttk.Frame):
         if not salle:
             messagebox.showerror("Erreur", "Impossible de modifier la salle.")
             return
+        self._record_admin_action(
+            "salle.updated",
+            "salle",
+            salle_id,
+            f"nom={nom}, type={type_salle}, capacite={capacite}",
+        )
         self.refresh_salles()
 
     def delete_selected_salle(self):
@@ -511,8 +553,10 @@ class AdminDashboard(ttk.Frame):
         if not values:
             return
         salle_id = int(values[0])
+        salle_label = str(values[1]).strip()
         if messagebox.askyesno("Confirmer", f"Supprimer la salle {values[1]} ?"):
             if ResourceService.delete_salle(salle_id):
+                self._record_admin_action("salle.deleted", "salle", salle_id, f"salle={salle_label}")
                 messagebox.showinfo("Succès", "Salle supprimée.")
                 self.refresh_salles()
             else:
@@ -584,7 +628,8 @@ class AdminDashboard(ttk.Frame):
         except (ValueError, IndexError):
             messagebox.showerror("Erreur", "ID filière invalide.")
             return
-        ResourceService.create_groupe(nom=nom, effectif=effectif, filiere_id=filiere_id)
+        groupe = ResourceService.create_groupe(nom=nom, effectif=effectif, filiere_id=filiere_id)
+        self._record_admin_action("groupe.created", "groupe", groupe.id, f"nom={nom}, effectif={effectif}, filiere_id={filiere_id}")
         self.refresh_groupes()
 
     def edit_selected_groupe(self):
@@ -625,9 +670,16 @@ class AdminDashboard(ttk.Frame):
             messagebox.showwarning("Attention", "Aucune filière disponible.")
             return
 
-        if not ResourceService.update_groupe(groupe_id, {"nom": nom, "effectif": effectif, "filiere_id": filiere_id}):
+        groupe = ResourceService.update_groupe(groupe_id, {"nom": nom, "effectif": effectif, "filiere_id": filiere_id})
+        if not groupe:
             messagebox.showerror("Erreur", "Impossible de modifier ce groupe.")
             return
+        self._record_admin_action(
+            "groupe.updated",
+            "groupe",
+            groupe_id,
+            f"nom={nom}, effectif={effectif}, filiere_id={filiere_id}",
+        )
 
         self.refresh_groupes()
 
@@ -640,7 +692,10 @@ class AdminDashboard(ttk.Frame):
         if not values:
             return
         if messagebox.askyesno("Confirmer", f"Supprimer le groupe {values[1]} ?"):
-            if ResourceService.delete_groupe(int(values[0])):
+            groupe_id = int(values[0])
+            groupe_label = str(values[1]).strip()
+            if ResourceService.delete_groupe(groupe_id):
+                self._record_admin_action("groupe.deleted", "groupe", groupe_id, f"nom={groupe_label}")
                 self.refresh_groupes()
             else:
                 messagebox.showerror("Erreur", "Suppression impossible.")
@@ -710,13 +765,14 @@ class AdminDashboard(ttk.Frame):
         if not data:
             return
         try:
-            AuthService.create_user(
+            user = AuthService.create_user(
                 email=data["email"],
                 password=data["password"],
                 nom=data["nom"],
                 prenom=data["prenom"],
                 role="enseignant",
             )
+            self._record_admin_action("utilisateur.created", "utilisateur", user.id, f"email={user.email}, role=enseignant")
             self.refresh_utilisateurs()
             self.refresh_profs()
         except Exception as exc:
@@ -740,7 +796,7 @@ class AdminDashboard(ttk.Frame):
             messagebox.showerror("Erreur", "ID de groupe invalide.")
             return
         try:
-            AuthService.create_user(
+            user = AuthService.create_user(
                 email=data["email"],
                 password=data["password"],
                 nom=data["nom"],
@@ -748,6 +804,7 @@ class AdminDashboard(ttk.Frame):
                 role="etudiant",
                 groupe_id=groupe_id,
             )
+            self._record_admin_action("utilisateur.created", "utilisateur", user.id, f"email={user.email}, role=etudiant, groupe_id={groupe_id}")
             self.refresh_utilisateurs()
             self.refresh_groupes()
         except Exception as exc:
@@ -815,13 +872,22 @@ class AdminDashboard(ttk.Frame):
                 return
 
         try:
-            AuthService.update_user(
+            utilisateur = AuthService.update_user(
                 user_id=user_id,
                 nom=nom,
                 prenom=prenom,
                 email=email,
                 role=role,
                 groupe_id=groupe_id,
+            )
+            if utilisateur is None:
+                messagebox.showerror("Erreur", "Impossible de modifier cet utilisateur.")
+                return
+            self._record_admin_action(
+                "utilisateur.updated",
+                "utilisateur",
+                user_id,
+                f"nom={nom}, prenom={prenom}, role={current_role} -> {role}, groupe_id={groupe_id}",
             )
             self.refresh_utilisateurs()
             self.refresh_profs()
@@ -845,6 +911,7 @@ class AdminDashboard(ttk.Frame):
             return
 
         if AuthService.reset_password(user_id, new_password):
+            self._record_admin_action("utilisateur.password_reset", "utilisateur", user_id, "Mot de passe réinitialisé par admin")
             messagebox.showinfo("Succès", "Mot de passe mis à jour.")
         else:
             messagebox.showerror("Erreur", "Impossible de modifier le mot de passe.")
@@ -863,6 +930,7 @@ class AdminDashboard(ttk.Frame):
             return
         if messagebox.askyesno("Confirmer", "Supprimer cet utilisateur ?"):
             if AuthService.delete_user(user_id):
+                self._record_admin_action("utilisateur.deleted", "utilisateur", user_id, f"email={values[3]}")
                 self.refresh_utilisateurs()
                 self.refresh_profs()
                 self.refresh_groupes()
@@ -883,7 +951,9 @@ class AdminDashboard(ttk.Frame):
             messagebox.showwarning("Attention", "Vous ne pouvez pas désactiver votre propre compte.")
             return
         current_status = str(values[6]).strip().lower() in {"oui", "true", "1"}
-        if AuthService.set_status(user_id, not current_status):
+        new_status = not current_status
+        if AuthService.set_status(user_id, new_status):
+            self._record_admin_action("utilisateur.toggled", "utilisateur", user_id, f"actif={current_status} -> {new_status}")
             self.refresh_utilisateurs()
         else:
             messagebox.showerror("Erreur", "Impossible de modifier le statut.")
@@ -927,7 +997,8 @@ class AdminDashboard(ttk.Frame):
         if not nom:
             return
         code = simpledialog.askstring("Ajouter une filière", "Code :", initialvalue="")
-        ResourceService.create_filiere(nom=nom, code=code or None)
+        filiere = ResourceService.create_filiere(nom=nom, code=code or None)
+        self._record_admin_action("filiere.created", "filiere", filiere.id, f"nom={nom}, code={code or ''}")
         self.refresh_classes()
         self.refresh_groupes()
 
@@ -946,7 +1017,8 @@ class AdminDashboard(ttk.Frame):
                 except (ValueError, IndexError):
                     messagebox.showerror("Erreur", "ID de filière invalide.")
                     return
-        ResourceService.create_matiere(nom=nom, code=code, filiere_id=filiere_id)
+        matiere = ResourceService.create_matiere(nom=nom, code=code, filiere_id=filiere_id)
+        self._record_admin_action("matiere.created", "matiere", matiere.id, f"nom={nom}, code={code}, filiere_id={filiere_id}")
         self.refresh_classes()
 
     def delete_selected_class_item(self):
@@ -964,12 +1036,14 @@ class AdminDashboard(ttk.Frame):
                 if not ResourceService.delete_filiere(filiere_id):
                     messagebox.showerror("Erreur", "Suppression impossible (dépendances existantes).")
                     return
+                self._record_admin_action("filiere.deleted", "filiere", filiere_id, f"nom={selected_value[1]}")
         elif prefix.startswith("m-"):
             matiere_id = int(prefix.replace("m-", ""))
             if messagebox.askyesno("Confirmer", f"Supprimer la matière {selected_value[1]} ?"):
                 if not ResourceService.delete_matiere(matiere_id):
                     messagebox.showerror("Erreur", "Suppression impossible (dépendances existantes).")
                     return
+                self._record_admin_action("matiere.deleted", "matiere", matiere_id, f"nom={selected_value[1]}")
                 self.refresh_groupes()
         self.refresh_classes()
         self.refresh_groupes()
@@ -996,6 +1070,7 @@ class AdminDashboard(ttk.Frame):
             if not ResourceService.update_filiere(filiere_id, {"nom": nom, "code": code}):
                 messagebox.showerror("Erreur", "Impossible de modifier cette filière.")
                 return
+            self._record_admin_action("filiere.updated", "filiere", filiere_id, f"nom={nom}, code={code}")
             self.refresh_classes()
             self.refresh_groupes()
             return
@@ -1012,6 +1087,7 @@ class AdminDashboard(ttk.Frame):
             if not ResourceService.update_matiere(matiere_id, {"nom": nom, "code": code}):
                 messagebox.showerror("Erreur", "Impossible de modifier cette matière.")
                 return
+            self._record_admin_action("matiere.updated", "matiere", matiere_id, f"nom={nom}, code={code}")
             self.refresh_classes()
             return
 
@@ -1062,6 +1138,7 @@ class AdminDashboard(ttk.Frame):
             if messagebox.askyesno("Confirmation", "Aucune matière choisie: effacer toutes les affectations ?"):
                 try:
                     if AuthService.set_teacher_matieres(teacher.id, []):
+                        self._record_admin_action("enseignant_matieres.updated", "enseignant", teacher.id, f"matières: {sorted(set(assigned))} -> []")
                         messagebox.showinfo("Succès", "Affectations mises à jour.")
                 except Exception as exc:
                     messagebox.showerror("Erreur", str(exc))
@@ -1076,6 +1153,12 @@ class AdminDashboard(ttk.Frame):
 
         try:
             if AuthService.set_teacher_matieres(teacher.id, matiere_ids):
+                self._record_admin_action(
+                    "enseignant_matieres.updated",
+                    "enseignant",
+                    teacher.id,
+                    f"matières: {sorted(set(assigned))} -> {sorted(set(matiere_ids))}",
+                )
                 messagebox.showinfo("Succès", "Affectations mises à jour.")
             else:
                 messagebox.showerror("Erreur", "Impossible de mettre à jour les matières.")
@@ -1127,8 +1210,83 @@ class AdminDashboard(ttk.Frame):
         slot_times = self.setting_slot_times.get().strip()
         slot_duration = self.setting_slot_duration.get().strip()
         try:
+            previous = (
+                SchoolSettingsService.get_working_days(),
+                [t.strftime("%H:%M") for t in SchoolSettingsService.get_slot_times()],
+                str(SchoolSettingsService.get_slot_duration_minutes()),
+            )
             SchoolSettingsService.set_planning_settings(work_days, slot_times, slot_duration)
+            self._record_admin_action(
+                "planning.updated",
+                "planning",
+                None,
+                f"before={previous} -> after=({work_days}; {slot_times}; {slot_duration})",
+            )
             messagebox.showinfo("Succès", "Paramètres planification enregistrés.")
             self.refresh_parameters_view()
         except Exception as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    # --- Journal d'audit ---
+    def setup_audit(self):
+        frame = ttk.Labelframe(self.tab_audit, text="Journal d'activité admin", padding=15, bootstyle="primary")
+        frame.pack(fill="both", expand=True)
+
+        toolbar = ttk.Frame(frame)
+        toolbar.pack(fill="x", pady=(0, 10))
+        ttk.Button(toolbar, text="🔄 Rafraîchir", command=self.refresh_audit, bootstyle="info").pack(side="left")
+        ttk.Button(toolbar, text="🧹 Vider", command=self.clear_audit, bootstyle="danger").pack(side="left", padx=(6, 0))
+
+        columns = ("id", "date", "admin", "action", "type", "entity_id", "details")
+        self.tree_audit = ttk.Treeview(frame, columns=columns, show="headings", bootstyle="info")
+        self.tree_audit.heading("id", text="ID")
+        self.tree_audit.heading("date", text="Date")
+        self.tree_audit.heading("admin", text="Admin")
+        self.tree_audit.heading("action", text="Action")
+        self.tree_audit.heading("type", text="Type")
+        self.tree_audit.heading("entity_id", text="ID Entité")
+        self.tree_audit.heading("details", text="Détails")
+        self.tree_audit.column("id", width=50)
+        self.tree_audit.column("admin", width=160)
+        self.tree_audit.column("action", width=180)
+        self.tree_audit.column("type", width=120)
+        self.tree_audit.column("entity_id", width=90)
+        self.tree_audit.column("details", width=420)
+        self.tree_audit.pack(expand=True, fill="both")
+
+        self.refresh_audit()
+
+    def refresh_audit(self):
+        if not hasattr(self, "tree_audit"):
+            return
+        for row in self.tree_audit.get_children():
+            self.tree_audit.delete(row)
+        for log in AdminAuditService.get_recent(250):
+            admin_name = "système"
+            if log.admin:
+                admin_name = f"{log.admin.nom} {log.admin.prenom} ({log.admin.email})"
+            self.tree_audit.insert(
+                "",
+                "end",
+                values=(
+                    log.id,
+                    log.created_at.strftime("%Y-%m-%d %H:%M:%S") if log.created_at else "",
+                    admin_name,
+                    log.action,
+                    log.entity_type or "",
+                    log.entity_id or "",
+                    log.details or "",
+                ),
+            )
+
+    def clear_audit(self):
+        if not messagebox.askyesno("Confirmer", "Supprimer tous les logs d'audit ?"):
+            return
+        try:
+            for log in AdminAuditService.get_recent(5000):
+                db.session.delete(log)
+            db.session.commit()
+            self.refresh_audit()
+        except Exception as exc:
+            db.session.rollback()
             messagebox.showerror("Erreur", str(exc))
