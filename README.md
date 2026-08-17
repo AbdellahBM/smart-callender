@@ -96,12 +96,16 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Initialize the Demo Database
-Run the seed script to create the database and inject sample data (perfect for testing the CSP engine):
+### 4. Initialize the Demo Database (Manual Setup)
+Run the seed script explicitly to initialize the database and demo entities:
 
 ```bash
 python seed.py
 ```
+
+⚠️ This script is intentional and destructive for local setup:
+it drops and recreates database tables to load demo data. Run it only once
+during bootstrap or in a maintenance window.
 
 ### 5. Launch the Application
 ```bash

@@ -1,8 +1,8 @@
 """
 seed.py - Point d'entrée pour initialiser la base de données.
 
-Délègue à scripts/seed_db.py pour créer les tables et insérer
-les données marocaines (filieres SMI/SEG, salles, enseignants, etc.).
+Ce script est volontairement explicite : il applique un seed complet en mode
+démo et réinitialise la base si elle existe.
 Exécuter : python seed.py
 """
 

@@ -1,9 +1,15 @@
+import csv
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
-from tkinter import messagebox, simpledialog
+from tkinter import filedialog, messagebox, simpledialog
+from datetime import datetime
 from app.services.resource_service import ResourceService
+from app.services.auth_service import AuthService
+from app.services.admin_audit_service import AdminAuditService
 from app.extensions import db
-from app.models import Reservation
+from app.models import Reservation, Utilisateur
+from app.services.room_service import get_occupied_salle_ids
+from app.services.settings_service import SchoolSettingsService
 
 class AdminDashboard(ttk.Frame):
     def __init__(self, parent, controller, user):
@@ -28,6 +34,10 @@ class AdminDashboard(ttk.Frame):
         self.tab_enseignants = ttk.Frame(self.notebook, padding=10)
         self.tab_groupes = ttk.Frame(self.notebook, padding=10)
         self.tab_planning = ttk.Frame(self.notebook, padding=10)
+        self.tab_parametres = ttk.Frame(self.notebook, padding=10)
+        self.tab_utilisateurs = ttk.Frame(self.notebook, padding=10)
+        self.tab_classes = ttk.Frame(self.notebook, padding=10)
+        self.tab_audit = ttk.Frame(self.notebook, padding=10)
         
         self.notebook.add(self.tab_dashboard, text="Tableau de bord")
         self.notebook.add(self.tab_planning, text="📅 Planning")
@@ -35,16 +45,30 @@ class AdminDashboard(ttk.Frame):
         self.notebook.add(self.tab_salles, text="🏢 Salles")
         self.notebook.add(self.tab_enseignants, text="👨‍🏫 Enseignants")
         self.notebook.add(self.tab_groupes, text="🎓 Groupes")
+        self.notebook.add(self.tab_utilisateurs, text="👥 Utilisateurs")
+        self.notebook.add(self.tab_classes, text="📘 Filières / Matières")
+        self.notebook.add(self.tab_parametres, text="⚙️ Paramètres")
+        self.notebook.add(self.tab_audit, text="🧾 Journal")
         
         self.setup_dashboard()
         self.setup_reservations()
         self.setup_salles()
         self.setup_enseignants()
         self.setup_groupes()
+        self.setup_utilisateurs()
+        self.setup_classes()
+        self.setup_parametres()
+        self.setup_audit()
         
         # Charger le module planning
         from app.gui.schedule_ui import ScheduleFrame
         ScheduleFrame(self.tab_planning, controller).pack(fill="both", expand=True)
+
+    def _selected_tree_values(self, tree):
+        selected = tree.selection()
+        if not selected:
+            return None
+        return tree.item(selected[0], "values")
 
     def setup_dashboard(self):
         # KPIs Container
@@ -67,20 +91,44 @@ class AdminDashboard(ttk.Frame):
         ttk.Label(frame, text=str(value), font=("Helvetica", 36, "bold"), bootstyle=bootstyle).pack()
         return frame
 
+    def _record_admin_action(self, action, entity_type=None, entity_id=None, details=None):
+        if AdminAuditService.log_action(self.user, action, entity_type=entity_type, entity_id=entity_id, details=details):
+            if hasattr(self, "tree_audit"):
+                try:
+                    self.refresh_audit()
+                except Exception:
+                    pass
+
     # --- Gestion Réservations ---
     def setup_reservations(self):
         # Toolbar
         btn_frame = ttk.Frame(self.tab_reservations)
         btn_frame.pack(fill="x", pady=(0, 10))
+
+        ttk.Label(btn_frame, text="Statut:").pack(side="left", padx=(0, 6))
+        self.reservation_status_filter = ttk.Combobox(
+            btn_frame,
+            values=["Toutes", "En attente", "Acceptée", "Refusée"],
+            state="readonly",
+            width=14,
+        )
+        self.reservation_status_filter.set("Toutes")
+        self.reservation_status_filter.pack(side="left")
+        self.reservation_status_filter.bind("<<ComboboxSelected>>", lambda *_: self.refresh_reservations())
         
         ttk.Button(btn_frame, text="✅ Valider", command=self.valider_reservation, bootstyle="success").pack(side="left", padx=5)
         ttk.Button(btn_frame, text="❌ Refuser", command=self.refuser_reservation, bootstyle="danger").pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="↩️ Remettre en attente", command=self.reinitialiser_reservation, bootstyle="warning").pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="📝 Modifier", command=self.edit_selected_reservation, bootstyle="info").pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="❌ Supprimer", command=self.delete_selected_reservation, bootstyle="danger").pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="➕ Ajouter", command=self.add_reservation_direct, bootstyle="success").pack(side="left", padx=5)
         ttk.Button(btn_frame, text="🔄 Rafraîchir", command=self.refresh_reservations, bootstyle="info-outline").pack(side="left", padx=5)
         
-        cols = ("id", "prof", "date", "heure", "salle", "statut", "motif")
+        cols = ("id", "prof", "enseignant_id", "date", "heure", "salle", "statut", "motif", "commentaire_admin")
         self.tree_res = ttk.Treeview(self.tab_reservations, columns=cols, show="headings", bootstyle="primary")
         for col in cols: self.tree_res.heading(col, text=col.capitalize())
         self.tree_res.column("id", width=50)
+        self.tree_res.column("enseignant_id", width=30)
         self.tree_res.pack(expand=True, fill="both")
         
         self.refresh_reservations()
@@ -89,12 +137,35 @@ class AdminDashboard(ttk.Frame):
         for row in self.tree_res.get_children():
             self.tree_res.delete(row)
         
-        res_list = db.session.query(Reservation).order_by(Reservation.date_reservation).all()
+        query = db.session.query(Reservation).order_by(Reservation.date_reservation, Reservation.heure_debut)
+        status_filter = self.reservation_status_filter.get()
+        if status_filter == "En attente":
+            query = query.filter_by(statut="en_attente")
+        elif status_filter == "Acceptée":
+            query = query.filter_by(statut="acceptee")
+        elif status_filter == "Refusée":
+            query = query.filter_by(statut="refusee")
+        res_list = query.all()
+
         for r in res_list:
             prof_nom = r.demandeur.nom if r.demandeur else "?"
             salle_nom = r.salle.nom if r.salle else "?"
             # Tag rows based on status? Treeview tags need configuration, keeping simple for now
-            self.tree_res.insert("", "end", values=(r.id, prof_nom, r.date_reservation, f"{r.heure_debut}-{r.heure_fin}", salle_nom, r.statut, r.motif))
+            self.tree_res.insert(
+                "",
+                "end",
+                values=(
+                    r.id,
+                    prof_nom,
+                    r.enseignant_id,
+                    r.date_reservation.strftime("%d/%m/%Y") if r.date_reservation else "",
+                    f"{r.heure_debut.strftime('%H:%M')}-{r.heure_fin.strftime('%H:%M')}",
+                    salle_nom,
+                    r.statut,
+                    r.motif or "",
+                    r.commentaire_admin or "",
+                ),
+            )
 
     def get_selected_reservation(self):
         selected = self.tree_res.selection()
@@ -104,31 +175,300 @@ class AdminDashboard(ttk.Frame):
         item = self.tree_res.item(selected[0])
         return item['values'][0]
 
+    def _parse_date(self, value):
+        value = str(value).strip()
+        if not value:
+            raise ValueError("La date est obligatoire.")
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(value, fmt).date()
+            except ValueError:
+                pass
+        raise ValueError("Date invalide. Format attendu: JJ/MM/AAAA.")
+
+    def _parse_time(self, value):
+        value = str(value).strip()
+        if not value:
+            raise ValueError("L'heure est obligatoire.")
+        for fmt in ("%H:%M", "%H:%M:%S"):
+            try:
+                return datetime.strptime(value, fmt).time()
+            except ValueError:
+                pass
+        raise ValueError("Heure invalide. Format attendu: HH:MM.")
+
+    def _extract_id(self, raw, label):
+        try:
+            return int(str(raw).split(":")[0].strip())
+        except (ValueError, IndexError):
+            raise ValueError(f"{label} invalide.")
+
+    def _set_reservation_status(self, reservation_id, statut, commentaire_admin=None):
+        res = db.session.get(Reservation, reservation_id)
+        if not res:
+            return False
+        if statut == "acceptee" and res.statut != "acceptee":
+            occupied = get_occupied_salle_ids(res.date_reservation, res.heure_debut, res.heure_fin)
+            if res.salle_id in occupied:
+                raise ValueError(
+                    "La salle est déjà occupée pour ce créneau (emploi du temps ou autre réservation acceptée)."
+                )
+        res.statut = statut
+        if commentaire_admin is not None:
+            res.commentaire_admin = commentaire_admin.strip() or None
+        db.session.commit()
+        return True
+
     def valider_reservation(self):
         res_id = self.get_selected_reservation()
         if res_id:
-            res = db.session.get(Reservation, res_id)
-            if res:
-                res.statut = "acceptee"
-                db.session.commit()
-                messagebox.showinfo("Succès", "Réservation acceptée.")
-                self.refresh_reservations()
+            try:
+                comment = simpledialog.askstring("Valider réservation", "Commentaire admin (optionnel):")
+                if self._set_reservation_status(res_id, "acceptee", comment):
+                    messagebox.showinfo("Succès", "Réservation acceptée.")
+                    self._record_admin_action("reservation.approved", "reservation", res_id, comment or "ok")
+                    self.refresh_reservations()
+            except Exception as exc:
+                messagebox.showerror("Erreur", str(exc))
 
     def refuser_reservation(self):
         res_id = self.get_selected_reservation()
         if res_id:
-            res = db.session.get(Reservation, res_id)
-            if res:
-                res.statut = "refusee"
-                db.session.commit()
-                messagebox.showinfo("Succès", "Réservation refusée.")
-                self.refresh_reservations()
+            try:
+                comment = simpledialog.askstring("Refuser réservation", "Raison du refus :")
+                if comment is None:
+                    return
+                if self._set_reservation_status(res_id, "refusee", comment):
+                    messagebox.showinfo("Succès", "Réservation refusée.")
+                    self._record_admin_action("reservation.rejected", "reservation", res_id, comment or "ok")
+                    self.refresh_reservations()
+            except Exception as exc:
+                messagebox.showerror("Erreur", str(exc))
+
+    def reinitialiser_reservation(self):
+        res_id = self.get_selected_reservation()
+        if res_id:
+            try:
+                if self._set_reservation_status(res_id, "en_attente", None):
+                    messagebox.showinfo("Succès", "Statut remis en attente.")
+                    self._record_admin_action("reservation.reset", "reservation", res_id, "Remettre en attente")
+                    self.refresh_reservations()
+            except Exception as exc:
+                messagebox.showerror("Erreur", str(exc))
+
+    def delete_selected_reservation(self):
+        res_id = self.get_selected_reservation()
+        if not res_id:
+            return
+        if not messagebox.askyesno("Confirmer", "Supprimer cette réservation ?"):
+            return
+        res = db.session.get(Reservation, res_id)
+        if not res:
+            messagebox.showerror("Erreur", "Réservation introuvable.")
+            return
+        db.session.delete(res)
+        db.session.commit()
+        messagebox.showinfo("Succès", "Réservation supprimée.")
+        self._record_admin_action("reservation.deleted", "reservation", res_id, f"Salle {res.salle_id} / Enseignant {res.enseignant_id}")
+        self.refresh_reservations()
+
+    def edit_selected_reservation(self):
+        res_id = self.get_selected_reservation()
+        if not res_id:
+            return
+
+        res = db.session.get(Reservation, res_id)
+        if not res:
+            messagebox.showerror("Erreur", "Réservation introuvable.")
+            return
+
+        enseignants = AuthService.get_all()
+        enseignant_opts = [f"{u.id}: {u.nom} {u.prenom} ({u.email})" for u in enseignants if u.role == "enseignant"]
+        if not enseignant_opts:
+            messagebox.showerror("Erreur", "Aucun enseignant disponible.")
+            return
+        enseignant_input = simpledialog.askstring(
+            "Modifier réservation",
+            f"Enseignant (id): {', '.join(enseignant_opts)}",
+            initialvalue=f"{res.enseignant_id}: {res.demandeur.nom if res.demandeur else 'utilisateur'}",
+        )
+        if enseignant_input is None:
+            return
+
+        salle_opts = [f"{s.id}: {s.nom}" for s in ResourceService.get_all_salles()]
+        if not salle_opts:
+            messagebox.showerror("Erreur", "Aucune salle disponible.")
+            return
+        salle_input = simpledialog.askstring(
+            "Modifier réservation",
+            f"Salle (id): {', '.join(salle_opts)}",
+            initialvalue=f"{res.salle_id}: {res.salle.nom if res.salle else ''}",
+        )
+        if salle_input is None:
+            return
+
+        date_input = simpledialog.askstring(
+            "Modifier réservation",
+            "Date (JJ/MM/AAAA):",
+            initialvalue=res.date_reservation.strftime('%d/%m/%Y') if res.date_reservation else "",
+        )
+        if date_input is None:
+            return
+
+        heure_debut_input = simpledialog.askstring(
+            "Modifier réservation",
+            "Heure début (HH:MM):",
+            initialvalue=res.heure_debut.strftime('%H:%M') if res.heure_debut else "",
+        )
+        if heure_debut_input is None:
+            return
+
+        heure_fin_input = simpledialog.askstring(
+            "Modifier réservation",
+            "Heure fin (HH:MM):",
+            initialvalue=res.heure_fin.strftime('%H:%M') if res.heure_fin else "",
+        )
+        if heure_fin_input is None:
+            return
+
+        motif_input = simpledialog.askstring("Modifier réservation", "Motif:", initialvalue=res.motif or "")
+        if motif_input is None:
+            return
+
+        commentaire_input = simpledialog.askstring(
+            "Modifier réservation",
+            "Commentaire admin:",
+            initialvalue=res.commentaire_admin or "",
+        )
+        if commentaire_input is None:
+            return
+
+        statut_input = simpledialog.askstring("Modifier réservation", "Statut (en_attente/acceptee/refusee):", initialvalue=res.statut)
+        if statut_input is None:
+            return
+        statut_input = statut_input.strip().lower()
+        if statut_input not in {"en_attente", "acceptee", "refusee"}:
+            messagebox.showerror("Erreur", "Statut invalide.")
+            return
+
+        try:
+            date_reservation = self._parse_date(date_input)
+            heure_debut = self._parse_time(heure_debut_input)
+            heure_fin = self._parse_time(heure_fin_input)
+            if heure_debut >= heure_fin:
+                messagebox.showerror("Erreur", "L'heure de fin doit être après l'heure de début.")
+                return
+            enseignant_id = self._extract_id(enseignant_input, "Enseignant")
+            salle_id = self._extract_id(salle_input, "Salle")
+
+            res.enseignant_id = enseignant_id
+            res.salle_id = salle_id
+            res.date_reservation = date_reservation
+            res.heure_debut = heure_debut
+            res.heure_fin = heure_fin
+            res.motif = motif_input
+            res.commentaire_admin = commentaire_input.strip() or None
+
+            if statut_input == "acceptee" and res.statut != "acceptee":
+                occupied = get_occupied_salle_ids(date_reservation, heure_debut, heure_fin)
+                if salle_id in occupied:
+                    messagebox.showerror(
+                        "Conflit",
+                        "Cette salle est déjà occupée sur ce créneau. Réservation non modifiée."
+                    )
+                    return
+
+            res.statut = statut_input
+            db.session.commit()
+            self._record_admin_action(
+                "reservation.updated",
+                "reservation",
+                res_id,
+                f"enseignant={enseignant_id}, salle={salle_id}, date={date_reservation}, {heure_debut}-{heure_fin}, statut={statut_input}"
+            )
+            self.refresh_reservations()
+            messagebox.showinfo("Succès", "Réservation mise à jour.")
+        except Exception as exc:
+            db.session.rollback()
+            messagebox.showerror("Erreur", str(exc))
+
+    def add_reservation_direct(self):
+        enseignants = AuthService.get_all()
+        enseignant_opts = [f"{u.id}: {u.nom} {u.prenom} ({u.email})" for u in enseignants if u.role == "enseignant"]
+        if not enseignant_opts:
+            messagebox.showerror("Erreur", "Aucun enseignant disponible.")
+            return
+        enseignant_input = simpledialog.askstring("Ajouter une réservation", f"Enseignant (id): {', '.join(enseignant_opts)}")
+        if enseignant_input is None:
+            return
+        salles = ResourceService.get_all_salles()
+        salle_opts = [f"{s.id}: {s.nom}" for s in salles]
+        if not salle_opts:
+            messagebox.showerror("Erreur", "Aucune salle disponible.")
+            return
+        salle_input = simpledialog.askstring("Ajouter une réservation", f"Salle (id): {', '.join(salle_opts)}")
+        if salle_input is None:
+            return
+        date_input = simpledialog.askstring("Ajouter une réservation", "Date (JJ/MM/AAAA):", initialvalue=datetime.now().strftime('%d/%m/%Y'))
+        if date_input is None:
+            return
+        heure_debut_input = simpledialog.askstring("Ajouter une réservation", "Heure début (HH:MM):", initialvalue="08:30")
+        if heure_debut_input is None:
+            return
+        heure_fin_input = simpledialog.askstring("Ajouter une réservation", "Heure fin (HH:MM):", initialvalue="10:00")
+        if heure_fin_input is None:
+            return
+        motif_input = simpledialog.askstring("Ajouter une réservation", "Motif (optionnel):")
+        if motif_input is None:
+            return
+
+        try:
+            enseignant_id = self._extract_id(enseignant_input, "Enseignant")
+            salle_id = self._extract_id(salle_input, "Salle")
+            date_reservation = self._parse_date(date_input)
+            heure_debut = self._parse_time(heure_debut_input)
+            heure_fin = self._parse_time(heure_fin_input)
+            if heure_debut >= heure_fin:
+                raise ValueError("L'heure de fin doit être après l'heure de début.")
+
+            occupied = get_occupied_salle_ids(date_reservation, heure_debut, heure_fin)
+            if salle_id in occupied:
+                if not messagebox.askyesno(
+                    "Conflit détecté",
+                    "La salle est déjà occupée sur ce créneau. Créer quand même la demande en attente ?"
+                ):
+                    return
+
+            new_reservation = Reservation(
+                enseignant_id=enseignant_id,
+                salle_id=salle_id,
+                date_reservation=date_reservation,
+                heure_debut=heure_debut,
+                heure_fin=heure_fin,
+                motif=motif_input,
+                statut="en_attente",
+            )
+            db.session.add(new_reservation)
+            db.session.commit()
+            self._record_admin_action(
+                "reservation.created",
+                "reservation",
+                new_reservation.id,
+                f"enseignant={enseignant_id}, salle={salle_id}, date={date_reservation}, {heure_debut}-{heure_fin}",
+            )
+            self.refresh_reservations()
+            messagebox.showinfo("Succès", "Réservation créée.")
+        except Exception as exc:
+            db.session.rollback()
+            messagebox.showerror("Erreur", str(exc))
 
     # --- Gestion Salles ---
     def setup_salles(self):
         btn_frame = ttk.Frame(self.tab_salles)
         btn_frame.pack(fill="x", pady=(0, 10))
         ttk.Button(btn_frame, text="+ Ajouter Salle", command=self.add_salle, bootstyle="success").pack(side="left")
+        ttk.Button(btn_frame, text="✏️ Modifier", command=self.edit_selected_salle, bootstyle="warning").pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="🗑 Supprimer Salle", command=self.delete_selected_salle, bootstyle="danger").pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Rafraîchir", command=self.refresh_salles, bootstyle="info-outline").pack(side="left", padx=5)
         
         columns = ("id", "nom", "type", "capacite")
@@ -147,9 +487,81 @@ class AdminDashboard(ttk.Frame):
 
     def add_salle(self):
         nom = simpledialog.askstring("Ajout Salle", "Nom de la salle:")
-        if nom:
-            ResourceService.create_salle({"nom": nom, "capacite": 30, "type_salle": "cours"})
-            self.refresh_salles()
+        if not nom:
+            return
+        capacite = simpledialog.askinteger("Ajout Salle", "Capacité:", initialvalue=30)
+        if capacite is None:
+            return
+        type_salle = simpledialog.askstring("Ajout Salle", "Type (cours, tp, amphi):", initialvalue="cours")
+        salle = ResourceService.create_salle(
+            {
+                "nom": nom,
+                "capacite": capacite,
+                "type_salle": type_salle or "cours",
+            }
+        )
+        if salle:
+            self._record_admin_action(
+                "salle.created",
+                "salle",
+                salle.id,
+                f"nom={salle.nom}, type={salle.type_salle}, capacite={salle.capacite}",
+            )
+        self.refresh_salles()
+
+    def edit_selected_salle(self):
+        values = self._selected_tree_values(self.tree_salles)
+        if not values:
+            messagebox.showwarning("Attention", "Sélectionnez une salle.")
+            return
+
+        salle_id = int(values[0])
+        nom = simpledialog.askstring("Modifier Salle", "Nom:", initialvalue=str(values[1]).strip())
+        if nom is None:
+            return
+        capacite = simpledialog.askinteger("Modifier Salle", "Capacité:", initialvalue=int(values[3]) if str(values[3]).isdigit() else 30)
+        if capacite is None:
+            return
+        type_salle = simpledialog.askstring("Modifier Salle", "Type (cours, tp, amphi):", initialvalue=str(values[2]).strip())
+        if type_salle is None:
+            return
+
+        salle = ResourceService.update_salle(
+            salle_id,
+            {
+                "nom": nom,
+                "capacite": capacite,
+                "type_salle": type_salle,
+            },
+        )
+        if not salle:
+            messagebox.showerror("Erreur", "Impossible de modifier la salle.")
+            return
+        self._record_admin_action(
+            "salle.updated",
+            "salle",
+            salle_id,
+            f"nom={nom}, type={type_salle}, capacite={capacite}",
+        )
+        self.refresh_salles()
+
+    def delete_selected_salle(self):
+        selected = self.tree_salles.selection()
+        if not selected:
+            messagebox.showwarning("Attention", "Sélectionnez une salle.")
+            return
+        values = self.tree_salles.item(selected[0], "values")
+        if not values:
+            return
+        salle_id = int(values[0])
+        salle_label = str(values[1]).strip()
+        if messagebox.askyesno("Confirmer", f"Supprimer la salle {values[1]} ?"):
+            if ResourceService.delete_salle(salle_id):
+                self._record_admin_action("salle.deleted", "salle", salle_id, f"salle={salle_label}")
+                messagebox.showinfo("Succès", "Salle supprimée.")
+                self.refresh_salles()
+            else:
+                messagebox.showerror("Erreur", "Suppression impossible.")
 
     # --- Gestion Enseignants ---
     def setup_enseignants(self):
@@ -159,6 +571,11 @@ class AdminDashboard(ttk.Frame):
         self.tree_profs.heading("email", text="Email")
         self.tree_profs.column("id", width=50)
         self.tree_profs.pack(expand=True, fill="both")
+
+        btn_frame = ttk.Frame(self.tab_enseignants)
+        btn_frame.pack(fill="x", pady=(10, 0))
+        ttk.Button(btn_frame, text="🧩 Gérer matières", command=self.manage_teacher_matieres_from_list, bootstyle="warning").pack(side="left")
+
         self.refresh_profs()
 
     def refresh_profs(self):
@@ -169,16 +586,755 @@ class AdminDashboard(ttk.Frame):
 
     # --- Gestion Groupes ---
     def setup_groupes(self):
-        self.tree_groupes = ttk.Treeview(self.tab_groupes, columns=("id", "nom", "effectif"), show="headings", bootstyle="warning")
+        self.tree_groupes = ttk.Treeview(self.tab_groupes, columns=("id", "nom", "effectif", "filiere"), show="headings", bootstyle="warning")
         self.tree_groupes.heading("id", text="ID")
         self.tree_groupes.heading("nom", text="Nom")
         self.tree_groupes.heading("effectif", text="Effectif")
+        self.tree_groupes.heading("filiere", text="Filière")
         self.tree_groupes.column("id", width=50)
         self.tree_groupes.pack(expand=True, fill="both")
+
+        btn_frame = ttk.Frame(self.tab_groupes)
+        btn_frame.pack(fill="x", pady=(10, 0))
+        ttk.Button(btn_frame, text="➕ Ajouter un groupe", command=self.add_groupe, bootstyle="success").pack(side="left")
+        ttk.Button(btn_frame, text="✏️ Modifier", command=self.edit_selected_groupe, bootstyle="warning").pack(side="left", padx=6)
+        ttk.Button(btn_frame, text="🗑 Supprimer", command=self.delete_selected_groupe, bootstyle="danger").pack(side="left", padx=6)
+
         self.refresh_groupes()
 
     def refresh_groupes(self):
         for row in self.tree_groupes.get_children():
             self.tree_groupes.delete(row)
         for g in ResourceService.get_all_groupes():
-            self.tree_groupes.insert("", "end", values=(g.id, g.nom, g.effectif))
+            filiere_nom = g.filiere.nom if g.filiere else "?"
+            self.tree_groupes.insert("", "end", values=(g.id, g.nom, g.effectif, filiere_nom))
+
+    def add_groupe(self):
+        nom = simpledialog.askstring("Ajouter un groupe", "Nom du groupe:")
+        if not nom:
+            return
+        effectif = simpledialog.askinteger("Ajouter un groupe", "Effectif:", initialvalue=30)
+        if effectif is None:
+            return
+        filieres = ResourceService.get_all_filieres()
+        options = [f"{f.id}: {f.nom}" for f in filieres]
+        if not options:
+            messagebox.showwarning("Attention", "Aucune filière disponible. Créez d'abord une filière.")
+            return
+        choix = simpledialog.askstring("Ajouter un groupe", f"Filière (id): {', '.join(options)}")
+        if not choix:
+            return
+        try:
+            filiere_id = int(choix.split(":")[0])
+        except (ValueError, IndexError):
+            messagebox.showerror("Erreur", "ID filière invalide.")
+            return
+        groupe = ResourceService.create_groupe(nom=nom, effectif=effectif, filiere_id=filiere_id)
+        self._record_admin_action("groupe.created", "groupe", groupe.id, f"nom={nom}, effectif={effectif}, filiere_id={filiere_id}")
+        self.refresh_groupes()
+
+    def edit_selected_groupe(self):
+        values = self._selected_tree_values(self.tree_groupes)
+        if not values:
+            messagebox.showwarning("Attention", "Sélectionnez un groupe.")
+            return
+
+        groupe_id = int(values[0])
+        filiere_nom = str(values[3]).strip()
+        filieres = ResourceService.get_all_filieres()
+        filiere_options = [f"{f.id}: {f.nom}" for f in filieres]
+        current_filiere = next((f for f in filieres if f.nom == filiere_nom), None)
+        current_filiere_id = current_filiere.id if current_filiere else None
+
+        nom = simpledialog.askstring("Modifier groupe", "Nom:", initialvalue=str(values[1]).strip())
+        if nom is None:
+            return
+        effectif = simpledialog.askinteger("Modifier groupe", "Effectif:", initialvalue=int(values[2]) if str(values[2]).isdigit() else 0)
+        if effectif is None:
+            return
+
+        if filiere_options:
+            choix = simpledialog.askstring(
+                "Modifier groupe",
+                f"Filière (id): {', '.join(filiere_options)}",
+                initialvalue=f"{current_filiere_id}: {filiere_nom}" if current_filiere else "",
+            )
+            if not choix:
+                messagebox.showerror("Erreur", "Une filière est obligatoire.")
+                return
+            try:
+                filiere_id = int(choix.split(\":\")[0].strip())
+            except (ValueError, IndexError):
+                messagebox.showerror("Erreur", "ID filière invalide.")
+                return
+        else:
+            messagebox.showwarning("Attention", "Aucune filière disponible.")
+            return
+
+        groupe = ResourceService.update_groupe(groupe_id, {"nom": nom, "effectif": effectif, "filiere_id": filiere_id})
+        if not groupe:
+            messagebox.showerror("Erreur", "Impossible de modifier ce groupe.")
+            return
+        self._record_admin_action(
+            "groupe.updated",
+            "groupe",
+            groupe_id,
+            f"nom={nom}, effectif={effectif}, filiere_id={filiere_id}",
+        )
+
+        self.refresh_groupes()
+
+    def delete_selected_groupe(self):
+        selected = self.tree_groupes.selection()
+        if not selected:
+            messagebox.showwarning("Attention", "Sélectionnez un groupe.")
+            return
+        values = self.tree_groupes.item(selected[0], "values")
+        if not values:
+            return
+        if messagebox.askyesno("Confirmer", f"Supprimer le groupe {values[1]} ?"):
+            groupe_id = int(values[0])
+            groupe_label = str(values[1]).strip()
+            if ResourceService.delete_groupe(groupe_id):
+                self._record_admin_action("groupe.deleted", "groupe", groupe_id, f"nom={groupe_label}")
+                self.refresh_groupes()
+            else:
+                messagebox.showerror("Erreur", "Suppression impossible.")
+
+    # --- Gestion Utilisateurs ---
+    def setup_utilisateurs(self):
+        frame = ttk.Labelframe(self.tab_utilisateurs, text="Comptes", padding=15, bootstyle="secondary")
+        frame.pack(fill="both", expand=True)
+
+        self.tree_users = ttk.Treeview(
+            frame,
+            columns=("id", "nom", "prenom", "email", "role", "groupe", "actif"),
+            show="headings",
+            bootstyle="primary"
+        )
+        self.tree_users.heading("id", text="ID")
+        self.tree_users.heading("nom", text="Nom")
+        self.tree_users.heading("prenom", text="Prénom")
+        self.tree_users.heading("email", text="Email")
+        self.tree_users.heading("role", text="Rôle")
+        self.tree_users.heading("groupe", text="Groupe")
+        self.tree_users.heading("actif", text="Actif")
+        self.tree_users.column("id", width=50)
+        self.tree_users.pack(expand=True, fill="both")
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill="x", pady=(10, 0))
+        ttk.Button(btn_frame, text="➕ Ajouter enseignant", command=self.add_enseignant, bootstyle="success").pack(side="left", padx=(0, 6))
+        ttk.Button(btn_frame, text="➕ Ajouter étudiant", command=self.add_etudiant, bootstyle="success").pack(side="left", padx=(0, 6))
+        ttk.Button(btn_frame, text="🗑 Supprimer", command=self.delete_selected_user, bootstyle="danger").pack(side="left")
+        ttk.Button(btn_frame, text="✅ Activer/Désactiver", command=self.toggle_selected_user, bootstyle="warning").pack(side="left", padx=(6, 0))
+        ttk.Button(btn_frame, text="✏️ Modifier", command=self.edit_selected_user, bootstyle="info").pack(side="left", padx=(6, 0))
+        ttk.Button(btn_frame, text="🔑 Réinitialiser mdp", command=self.reset_user_password, bootstyle="secondary").pack(side="left", padx=(6, 0))
+        ttk.Button(btn_frame, text="🧩 Matières", command=self.manage_teacher_matieres, bootstyle="secondary").pack(side="left", padx=(6, 0))
+        self.refresh_utilisateurs()
+
+    def refresh_utilisateurs(self):
+        for row in self.tree_users.get_children():
+            self.tree_users.delete(row)
+        for u in AuthService.get_all():
+            groupe_nom = u.groupe.nom if u.groupe else "-"
+            self.tree_users.insert("", "end", values=(u.id, u.nom, u.prenom, u.email, u.role, groupe_nom, "Oui" if u.actif else "Non"))
+
+    def _ask_user_values(self, role):
+        nom = simpledialog.askstring("Créer un compte", "Nom:")
+        if not nom:
+            return None
+        prenom = simpledialog.askstring("Créer un compte", "Prénom:")
+        if not prenom:
+            return None
+        email = simpledialog.askstring("Créer un compte", "Email:")
+        if not email:
+            return None
+        password = simpledialog.askstring("Créer un compte", "Mot de passe initial:")
+        if not password:
+            return None
+        return {
+            "nom": nom,
+            "prenom": prenom,
+            "email": email,
+            "password": password,
+            "role": role,
+        }
+
+    def add_enseignant(self):
+        data = self._ask_user_values("enseignant")
+        if not data:
+            return
+        try:
+            user = AuthService.create_user(
+                email=data["email"],
+                password=data["password"],
+                nom=data["nom"],
+                prenom=data["prenom"],
+                role="enseignant",
+            )
+            self._record_admin_action("utilisateur.created", "utilisateur", user.id, f"email={user.email}, role=enseignant")
+            self.refresh_utilisateurs()
+            self.refresh_profs()
+        except Exception as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def add_etudiant(self):
+        data = self._ask_user_values("etudiant")
+        if not data:
+            return
+        groupes = ResourceService.get_all_groupes()
+        options = [f"{g.id}: {g.nom}" for g in groupes]
+        if not options:
+            messagebox.showwarning("Attention", "Aucun groupe disponible.")
+            return
+        choix = simpledialog.askstring("Créer un étudiant", f"Groupe (id): {', '.join(options)}")
+        if not choix:
+            return
+        try:
+            groupe_id = int(choix.split(":")[0])
+        except (ValueError, IndexError):
+            messagebox.showerror("Erreur", "ID de groupe invalide.")
+            return
+        try:
+            user = AuthService.create_user(
+                email=data["email"],
+                password=data["password"],
+                nom=data["nom"],
+                prenom=data["prenom"],
+                role="etudiant",
+                groupe_id=groupe_id,
+            )
+            self._record_admin_action("utilisateur.created", "utilisateur", user.id, f"email={user.email}, role=etudiant, groupe_id={groupe_id}")
+            self.refresh_utilisateurs()
+            self.refresh_groupes()
+        except Exception as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def _ask_role(self, default_role):
+        role = simpledialog.askstring("Modifier un utilisateur", "Rôle (admin/enseignant/etudiant):", initialvalue=default_role)
+        if role is None:
+            return None
+        role = role.strip().lower()
+        if role not in Utilisateur.ROLES:
+            messagebox.showerror("Erreur", "Rôle invalide.")
+            return None
+        return role
+
+    def edit_selected_user(self):
+        values = self._selected_tree_values(self.tree_users)
+        if not values:
+            messagebox.showwarning("Attention", "Sélectionnez un utilisateur.")
+            return
+
+        user_id = int(values[0])
+        current_role = values[4]
+        if user_id == self.user.id:
+            messagebox.showwarning("Attention", "Vous ne pouvez pas modifier votre propre compte depuis cette liste.")
+            return
+
+        user_entity = AuthService.get_by_id(user_id)
+        if not user_entity:
+            messagebox.showerror("Erreur", "Utilisateur introuvable.")
+            return
+
+        nom = simpledialog.askstring("Modifier un utilisateur", "Nom:", initialvalue=str(values[1]).strip())
+        if nom is None:
+            return
+        prenom = simpledialog.askstring("Modifier un utilisateur", "Prénom:", initialvalue=str(values[2]).strip())
+        if prenom is None:
+            return
+        email = simpledialog.askstring("Modifier un utilisateur", "Email:", initialvalue=str(values[3]).strip())
+        if email is None:
+            return
+        role = self._ask_role(current_role)
+        if role is None:
+            return
+
+        groupe_id = None
+        if role == "etudiant":
+            groupes = ResourceService.get_all_groupes()
+            options = [f"{g.id}: {g.nom}" for g in groupes]
+            if not options:
+                messagebox.showwarning("Attention", "Aucun groupe disponible. Créez d'abord un groupe.")
+                return
+            selected_group = simpledialog.askstring(
+                "Groupe étudiant",
+                f"Groupe (id): {', '.join(options)}",
+                initialvalue=f"{user_entity.groupe_id}: {user_entity.groupe.nom}" if user_entity.groupe_id else "",
+            )
+            if not selected_group:
+                messagebox.showerror("Erreur", "Un groupe est obligatoire pour un étudiant.")
+                return
+            try:
+                groupe_id = int(selected_group.split(\":\")[0].strip())
+            except (ValueError, IndexError):
+                messagebox.showerror("Erreur", "ID de groupe invalide.")
+                return
+
+        try:
+            utilisateur = AuthService.update_user(
+                user_id=user_id,
+                nom=nom,
+                prenom=prenom,
+                email=email,
+                role=role,
+                groupe_id=groupe_id,
+            )
+            if utilisateur is None:
+                messagebox.showerror("Erreur", "Impossible de modifier cet utilisateur.")
+                return
+            self._record_admin_action(
+                "utilisateur.updated",
+                "utilisateur",
+                user_id,
+                f"nom={nom}, prenom={prenom}, role={current_role} -> {role}, groupe_id={groupe_id}",
+            )
+            self.refresh_utilisateurs()
+            self.refresh_profs()
+            self.refresh_groupes()
+        except Exception as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def reset_user_password(self):
+        values = self._selected_tree_values(self.tree_users)
+        if not values:
+            messagebox.showwarning("Attention", "Sélectionnez un utilisateur.")
+            return
+
+        user_id = int(values[0])
+        if user_id == self.user.id:
+            messagebox.showwarning("Attention", "Vous ne pouvez pas réinitialiser votre propre mot de passe ici.")
+            return
+
+        new_password = simpledialog.askstring("Réinitialiser le mot de passe", "Nouveau mot de passe:", show="*")
+        if not new_password:
+            return
+
+        if AuthService.reset_password(user_id, new_password):
+            self._record_admin_action("utilisateur.password_reset", "utilisateur", user_id, "Mot de passe réinitialisé par admin")
+            messagebox.showinfo("Succès", "Mot de passe mis à jour.")
+        else:
+            messagebox.showerror("Erreur", "Impossible de modifier le mot de passe.")
+
+    def delete_selected_user(self):
+        selected = self.tree_users.selection()
+        if not selected:
+            messagebox.showwarning("Attention", "Sélectionnez un utilisateur.")
+            return
+        values = self.tree_users.item(selected[0], "values")
+        if not values:
+            return
+        user_id = int(values[0])
+        if user_id == self.user.id:
+            messagebox.showwarning("Attention", "Vous ne pouvez pas supprimer votre propre compte.")
+            return
+        if messagebox.askyesno("Confirmer", "Supprimer cet utilisateur ?"):
+            if AuthService.delete_user(user_id):
+                self._record_admin_action("utilisateur.deleted", "utilisateur", user_id, f"email={values[3]}")
+                self.refresh_utilisateurs()
+                self.refresh_profs()
+                self.refresh_groupes()
+                self.refresh_reservations()
+            else:
+                messagebox.showerror("Erreur", "Suppression impossible (compte référencé).")
+
+    def toggle_selected_user(self):
+        selected = self.tree_users.selection()
+        if not selected:
+            messagebox.showwarning("Attention", "Sélectionnez un utilisateur.")
+            return
+        values = self.tree_users.item(selected[0], "values")
+        if not values:
+            return
+        user_id = int(values[0])
+        if user_id == self.user.id:
+            messagebox.showwarning("Attention", "Vous ne pouvez pas désactiver votre propre compte.")
+            return
+        current_status = str(values[6]).strip().lower() in {"oui", "true", "1"}
+        new_status = not current_status
+        if AuthService.set_status(user_id, new_status):
+            self._record_admin_action("utilisateur.toggled", "utilisateur", user_id, f"actif={current_status} -> {new_status}")
+            self.refresh_utilisateurs()
+        else:
+            messagebox.showerror("Erreur", "Impossible de modifier le statut.")
+
+    # --- Gestion Filières / Matières ---
+    def setup_classes(self):
+        frame = ttk.Labelframe(self.tab_classes, text="Filières et matières", padding=15, bootstyle="warning")
+        frame.pack(fill="both", expand=True)
+
+        toolbar = ttk.Frame(frame)
+        toolbar.pack(fill="x", pady=(0, 10))
+        ttk.Button(toolbar, text="➕ Ajouter filière", command=self.add_filiere, bootstyle="success").pack(side="left", padx=(0, 6))
+        ttk.Button(toolbar, text="➕ Ajouter matière", command=self.add_matiere, bootstyle="success").pack(side="left", padx=(0, 6))
+
+        self.tree_classes = ttk.Treeview(frame, columns=("id", "nom", "type", "detail"), show="headings", bootstyle="warning")
+        self.tree_classes.heading("id", text="ID")
+        self.tree_classes.heading("nom", text="Nom")
+        self.tree_classes.heading("type", text="Type")
+        self.tree_classes.heading("detail", text="Détail")
+        self.tree_classes.column("id", width=50)
+        self.tree_classes.pack(expand=True, fill="both")
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill="x", pady=(10, 0))
+        ttk.Button(btn_frame, text="🗑 Supprimer sélection", command=self.delete_selected_class_item, bootstyle="danger").pack(side="left")
+        ttk.Button(btn_frame, text="✏️ Modifier sélection", command=self.edit_selected_class_item, bootstyle="warning").pack(side="left", padx=(6, 0))
+
+        self.refresh_classes()
+
+    def refresh_classes(self):
+        for row in self.tree_classes.get_children():
+            self.tree_classes.delete(row)
+        for f in ResourceService.get_all_filieres():
+            self.tree_classes.insert("", "end", values=(f"f-{f.id}", f.nom, "Filière", f.code or ""))
+        for m in ResourceService.get_all_matieres():
+            filiere_nom = m.filiere.nom if m.filiere else "Générale"
+            self.tree_classes.insert("", "end", values=(f"m-{m.id}", m.nom, "Matière", filiere_nom))
+
+    def add_filiere(self):
+        nom = simpledialog.askstring("Ajouter une filière", "Nom :")
+        if not nom:
+            return
+        code = simpledialog.askstring("Ajouter une filière", "Code :", initialvalue="")
+        filiere = ResourceService.create_filiere(nom=nom, code=code or None)
+        self._record_admin_action("filiere.created", "filiere", filiere.id, f"nom={nom}, code={code or ''}")
+        self.refresh_classes()
+        self.refresh_groupes()
+
+    def add_matiere(self):
+        nom = simpledialog.askstring("Ajouter une matière", "Nom :")
+        if not nom:
+            return
+        code = simpledialog.askstring("Ajouter une matière", "Code :", initialvalue="")
+        filieres = ResourceService.get_all_filieres()
+        filiere_id = None
+        if filieres:
+            choix = simpledialog.askstring("Ajouter une matière", f"Filière (id): {', '.join(f'{f.id}: {f.nom}' for f in filieres)}")
+            if choix:
+                try:
+                    filiere_id = int(choix.split(":")[0])
+                except (ValueError, IndexError):
+                    messagebox.showerror("Erreur", "ID de filière invalide.")
+                    return
+        matiere = ResourceService.create_matiere(nom=nom, code=code, filiere_id=filiere_id)
+        self._record_admin_action("matiere.created", "matiere", matiere.id, f"nom={nom}, code={code}, filiere_id={filiere_id}")
+        self.refresh_classes()
+
+    def delete_selected_class_item(self):
+        selected = self.tree_classes.selection()
+        if not selected:
+            messagebox.showwarning("Attention", "Sélectionnez un élément.")
+            return
+        selected_value = self.tree_classes.item(selected[0], "values")
+        if not selected_value:
+            return
+        prefix = str(selected_value[0])
+        if prefix.startswith("f-"):
+            filiere_id = int(prefix.replace("f-", ""))
+            if messagebox.askyesno("Confirmer", f"Supprimer la filière {selected_value[1]} ?"):
+                if not ResourceService.delete_filiere(filiere_id):
+                    messagebox.showerror("Erreur", "Suppression impossible (dépendances existantes).")
+                    return
+                self._record_admin_action("filiere.deleted", "filiere", filiere_id, f"nom={selected_value[1]}")
+        elif prefix.startswith("m-"):
+            matiere_id = int(prefix.replace("m-", ""))
+            if messagebox.askyesno("Confirmer", f"Supprimer la matière {selected_value[1]} ?"):
+                if not ResourceService.delete_matiere(matiere_id):
+                    messagebox.showerror("Erreur", "Suppression impossible (dépendances existantes).")
+                    return
+                self._record_admin_action("matiere.deleted", "matiere", matiere_id, f"nom={selected_value[1]}")
+                self.refresh_groupes()
+        self.refresh_classes()
+        self.refresh_groupes()
+
+    def edit_selected_class_item(self):
+        selected = self.tree_classes.selection()
+        if not selected:
+            messagebox.showwarning("Attention", "Sélectionnez un élément.")
+            return
+
+        selected_value = self.tree_classes.item(selected[0], "values")
+        if not selected_value:
+            return
+
+        prefix = str(selected_value[0])
+        if prefix.startswith("f-"):
+            filiere_id = int(prefix.replace("f-", ""))
+            nom = simpledialog.askstring("Modifier une filière", "Nom :", initialvalue=str(selected_value[1]).strip())
+            if nom is None:
+                return
+            code = simpledialog.askstring("Modifier une filière", "Code :", initialvalue=str(selected_value[3]).strip())
+            if code is None:
+                return
+            if not ResourceService.update_filiere(filiere_id, {"nom": nom, "code": code}):
+                messagebox.showerror("Erreur", "Impossible de modifier cette filière.")
+                return
+            self._record_admin_action("filiere.updated", "filiere", filiere_id, f"nom={nom}, code={code}")
+            self.refresh_classes()
+            self.refresh_groupes()
+            return
+
+        if prefix.startswith("m-"):
+            matiere_id = int(prefix.replace("m-", ""))
+            nom = simpledialog.askstring("Modifier une matière", "Nom :", initialvalue=str(selected_value[1]).strip())
+            if nom is None:
+                return
+            code = simpledialog.askstring("Modifier une matière", "Code :", initialvalue=str(selected_value[3]).strip())
+            if code is None:
+                return
+
+            if not ResourceService.update_matiere(matiere_id, {"nom": nom, "code": code}):
+                messagebox.showerror("Erreur", "Impossible de modifier cette matière.")
+                return
+            self._record_admin_action("matiere.updated", "matiere", matiere_id, f"nom={nom}, code={code}")
+            self.refresh_classes()
+            return
+
+    def manage_teacher_matieres_from_list(self):
+        values = self._selected_tree_values(self.tree_profs)
+        if not values:
+            messagebox.showwarning("Attention", "Sélectionnez un enseignant.")
+            return
+        user_id = int(values[0])
+        self.manage_teacher_matieres(user_id)
+
+    def manage_teacher_matieres(self, user_id_or_self=None):
+        if user_id_or_self is None:
+            values = self._selected_tree_values(self.tree_users)
+            if not values:
+                messagebox.showwarning("Attention", "Sélectionnez un utilisateur.")
+                return
+            user_id = int(values[0])
+        else:
+            user_id = int(user_id_or_self)
+
+        teacher = AuthService.get_by_id(user_id)
+        if not teacher:
+            messagebox.showerror("Erreur", "Utilisateur introuvable.")
+            return
+        if teacher.role != "enseignant":
+            messagebox.showwarning("Attention", "Vous pouvez gérer les matières uniquement pour un enseignant.")
+            return
+
+        all_matieres = ResourceService.get_all_matieres()
+        if not all_matieres:
+            messagebox.showwarning("Attention", "Aucune matière disponible.")
+            return
+
+        assigned = set(AuthService.get_teacher_matiere_ids(teacher.id))
+        options = [f"{m.id}: {m.nom}" for m in all_matieres]
+        current = ", ".join(f"{m.id}: {m.nom}" for m in all_matieres if m.id in assigned)
+
+        answer = simpledialog.askstring(
+            "Gestion matières enseignant",
+            f"Sélectionnez les IDs matières séparés par des virgules.\nActuelles: {current}\n{', '.join(options)}",
+            initialvalue=",".join(str(i) for i in sorted(assigned)),
+        )
+        if answer is None:
+            return
+
+        if not answer.strip():
+            if messagebox.askyesno("Confirmation", "Aucune matière choisie: effacer toutes les affectations ?"):
+                try:
+                    if AuthService.set_teacher_matieres(teacher.id, []):
+                        self._record_admin_action("enseignant_matieres.updated", "enseignant", teacher.id, f"matières: {sorted(set(assigned))} -> []")
+                        messagebox.showinfo("Succès", "Affectations mises à jour.")
+                except Exception as exc:
+                    messagebox.showerror("Erreur", str(exc))
+            return
+
+        parts = [part.strip() for part in answer.split(",")]
+        try:
+            matiere_ids = [int(part) for part in parts if part]
+        except ValueError:
+            messagebox.showerror("Erreur", "Les IDs doivent être des nombres séparés par des virgules.")
+            return
+
+        try:
+            if AuthService.set_teacher_matieres(teacher.id, matiere_ids):
+                self._record_admin_action(
+                    "enseignant_matieres.updated",
+                    "enseignant",
+                    teacher.id,
+                    f"matières: {sorted(set(assigned))} -> {sorted(set(matiere_ids))}",
+                )
+                messagebox.showinfo("Succès", "Affectations mises à jour.")
+            else:
+                messagebox.showerror("Erreur", "Impossible de mettre à jour les matières.")
+        except Exception as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    # --- Paramètres planning ---
+    def setup_parametres(self):
+        frame = ttk.Labelframe(self.tab_parametres, text="Planification", padding=15, bootstyle="secondary")
+        frame.pack(fill="x", pady=(0, 20))
+
+        # Jours actifs
+        ttk.Label(frame, text="Jours actifs (0=Lundi ... 6=Dimanche, séparés par des virgules)").pack(anchor="w")
+        self.setting_work_days = ttk.Entry(frame, width=40)
+        self.setting_work_days.pack(fill="x", pady=(0, 10))
+        self.setting_work_days.insert(0, ", ".join(str(d) for d in SchoolSettingsService.get_working_days()))
+
+        # Créneaux actifs
+        ttk.Label(frame, text="Créneaux (HH:MM, séparés par des virgules)").pack(anchor="w")
+        slot_times = SchoolSettingsService.get_slot_times()
+        self.setting_slot_times = ttk.Entry(frame, width=40)
+        self.setting_slot_times.pack(fill="x", pady=(0, 10))
+        self.setting_slot_times.insert(0, ", ".join(t.strftime("%H:%M") for t in slot_times))
+
+        # Durée des créneaux
+        ttk.Label(frame, text="Durée d'un créneau (minutes)").pack(anchor="w")
+        self.setting_slot_duration = ttk.Entry(frame, width=15)
+        self.setting_slot_duration.pack(anchor="w", pady=(0, 10))
+        self.setting_slot_duration.insert(0, str(SchoolSettingsService.get_slot_duration_minutes()))
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill="x", pady=(5, 0))
+        ttk.Button(btn_frame, text="💾 Enregistrer les paramètres", command=self.save_planning_parameters, bootstyle="success").pack(side="left", padx=(0, 8))
+        ttk.Button(btn_frame, text="🔄 Recharger", command=self.refresh_parameters_view, bootstyle="info").pack(side="left")
+
+        self.refresh_parameters_view()
+
+    def refresh_parameters_view(self):
+        self.setting_work_days.delete(0, "end")
+        self.setting_slot_times.delete(0, "end")
+        self.setting_slot_duration.delete(0, "end")
+
+        self.setting_work_days.insert(0, ", ".join(str(d) for d in SchoolSettingsService.get_working_days()))
+        self.setting_slot_times.insert(0, ", ".join(t.strftime("%H:%M") for t in SchoolSettingsService.get_slot_times()))
+        self.setting_slot_duration.insert(0, str(SchoolSettingsService.get_slot_duration_minutes()))
+
+    def save_planning_parameters(self):
+        work_days = self.setting_work_days.get().strip()
+        slot_times = self.setting_slot_times.get().strip()
+        slot_duration = self.setting_slot_duration.get().strip()
+        try:
+            previous = (
+                SchoolSettingsService.get_working_days(),
+                [t.strftime("%H:%M") for t in SchoolSettingsService.get_slot_times()],
+                str(SchoolSettingsService.get_slot_duration_minutes()),
+            )
+            SchoolSettingsService.set_planning_settings(work_days, slot_times, slot_duration)
+            self._record_admin_action(
+                "planning.updated",
+                "planning",
+                None,
+                f"before={previous} -> after=({work_days}; {slot_times}; {slot_duration})",
+            )
+            messagebox.showinfo("Succès", "Paramètres planification enregistrés.")
+            self.refresh_parameters_view()
+        except Exception as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    # --- Journal d'audit ---
+    def setup_audit(self):
+        frame = ttk.Labelframe(self.tab_audit, text="Journal d'activité admin", padding=15, bootstyle="primary")
+        frame.pack(fill="both", expand=True)
+
+        toolbar = ttk.Frame(frame)
+        toolbar.pack(fill="x", pady=(0, 10))
+        ttk.Button(toolbar, text="🔄 Rafraîchir", command=self.refresh_audit, bootstyle="info").pack(side="left")
+        ttk.Button(toolbar, text="📤 Exporter CSV", command=self.export_audit_csv, bootstyle="success").pack(side="left", padx=(6, 0))
+        ttk.Button(toolbar, text="🧹 Vider", command=self.clear_audit, bootstyle="danger").pack(side="left", padx=(6, 0))
+        ttk.Button(toolbar, text="🗑 Purger...", command=self.purge_audit, bootstyle="secondary").pack(side="left", padx=(6, 0))
+
+        columns = ("id", "date", "admin", "action", "type", "entity_id", "details")
+        self.tree_audit = ttk.Treeview(frame, columns=columns, show="headings", bootstyle="info")
+        self.tree_audit.heading("id", text="ID")
+        self.tree_audit.heading("date", text="Date")
+        self.tree_audit.heading("admin", text="Admin")
+        self.tree_audit.heading("action", text="Action")
+        self.tree_audit.heading("type", text="Type")
+        self.tree_audit.heading("entity_id", text="ID Entité")
+        self.tree_audit.heading("details", text="Détails")
+        self.tree_audit.column("id", width=50)
+        self.tree_audit.column("admin", width=160)
+        self.tree_audit.column("action", width=180)
+        self.tree_audit.column("type", width=120)
+        self.tree_audit.column("entity_id", width=90)
+        self.tree_audit.column("details", width=420)
+        self.tree_audit.pack(expand=True, fill="both")
+
+        self.refresh_audit()
+
+    def refresh_audit(self):
+        if not hasattr(self, "tree_audit"):
+            return
+        for row in self.tree_audit.get_children():
+            self.tree_audit.delete(row)
+        for log in AdminAuditService.get_recent(250):
+            admin_name = "système"
+            if log.admin:
+                admin_name = f"{log.admin.nom} {log.admin.prenom} ({log.admin.email})"
+            self.tree_audit.insert(
+                "",
+                "end",
+                values=(
+                    log.id,
+                    log.created_at.strftime("%Y-%m-%d %H:%M:%S") if log.created_at else "",
+                    admin_name,
+                    log.action,
+                    log.entity_type or "",
+                    log.entity_id or "",
+                    log.details or "",
+                ),
+            )
+
+    def clear_audit(self):
+        if not messagebox.askyesno("Confirmer", "Supprimer tous les logs d'audit ?"):
+            return
+        try:
+            deleted = AdminAuditService.purge_all()
+            self._record_admin_action("audit.cleared", "audit", None, f"total={deleted}")
+            self.refresh_audit()
+        except Exception as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def purge_audit(self):
+        days = simpledialog.askinteger("Purger le journal", "Supprimer les logs plus anciens que X jours :")
+        if days is None:
+            return
+        try:
+            deleted = AdminAuditService.purge_older_than(days)
+            self._record_admin_action("audit.purged", "audit", None, f"older_than_days={days}, removed={deleted}")
+            messagebox.showinfo("Succès", f"{deleted} logs supprimés.")
+            self.refresh_audit()
+        except Exception as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def export_audit_csv(self):
+        output_path = filedialog.asksaveasfilename(
+            title="Exporter le journal d'audit",
+            defaultextension=".csv",
+            filetypes=[("Fichier CSV", "*.csv"), ("Tous les fichiers", "*.*")],
+            initialfile=f"audit_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        )
+        if not output_path:
+            return
+        try:
+            logs = AdminAuditService.get_for_export(10000)
+            with open(output_path, "w", newline="", encoding="utf-8") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(["ID", "Date", "Admin ID", "Admin", "Action", "Entity type", "Entity ID", "Details"])
+                for log in logs:
+                    admin_name = ""
+                    if log.admin:
+                        admin_name = f"{log.admin.nom} {log.admin.prenom} ({log.admin.email})"
+                    writer.writerow(
+                        [
+                            log.id,
+                            log.created_at.strftime("%Y-%m-%d %H:%M:%S") if log.created_at else "",
+                            log.admin_id or "",
+                            admin_name,
+                            log.action,
+                            log.entity_type or "",
+                            log.entity_id or "",
+                            log.details or "",
+                        ]
+                    )
+            self._record_admin_action("audit.exported", "audit", None, f"file={output_path}, total={len(logs)}")
+            messagebox.showinfo("Succès", "Journal exporté en CSV.")
+        except Exception as exc:
+            messagebox.showerror("Erreur", str(exc))

@@ -8,6 +8,7 @@ from app.gui.auth import LoginFrame
 from app.gui.admin import AdminDashboard
 from app.gui.teacher import TeacherDashboard
 from app.gui.student import StudentDashboard
+from app.services.settings_service import SchoolSettingsService
 
 class DesktopApp:
     def __init__(self, root):
@@ -20,23 +21,43 @@ class DesktopApp:
         self.app_context = self.flask_app.app_context()
         self.app_context.push()
 
-        # Premier lancement : créer les tables et insérer les données de démo si la DB est vide
-        self._ensure_db_seeded()
+        # Premier lancement : créer les tables et garantir les réglages d'école.
+        self.startup_message = self._ensure_db_bootstrap()
+        self.startup_hint = self.startup_message
 
         self.current_frame = None
         self.user = None
         
         self.show_login()
 
-    def _ensure_db_seeded(self):
-        """Crée les tables et remplit la base avec les données de démo si elle est vide (exe premier lancement)."""
+    def _ensure_db_bootstrap(self):
+        """Crée les tables et vérifie l'état initial de l'installation."""
+        startup_hint = None
         try:
             db.create_all()
-            if db.session.query(Utilisateur).count() == 0:
-                from scripts.seed_db import seed
-                seed()
+            SchoolSettingsService.seed_default_settings()
+
+            user_count = db.session.query(Utilisateur).count()
+            if user_count == 0:
+                return (
+                    "Bienvenue dans Smart Callender !\n"
+                    "Aucun compte trouvé. Exécutez d'abord `python seed.py` pour un démarrage rapide (compte admin inclus),\n"
+                    "ou créez votre propre premier administrateur directement dans votre base de données."
+                )
+
+            admin_count = db.session.query(Utilisateur).filter_by(role="admin").count()
+            if admin_count == 0:
+                return (
+                    "Aucun administrateur actif détecté.\n"
+                    "Créez un compte admin en base ou relancez `python seed.py` selon votre stratégie de déploiement."
+                )
+
+            return startup_hint
         except Exception:
-            pass
+            return (
+                "Impossible de vérifier l'état initial de la base.\n"
+                "Vérifiez que la base de données est accessible et que `python seed.py` a été exécuté si nécessaire."
+            )
 
     def show_login(self):
         self.clear_frame()
