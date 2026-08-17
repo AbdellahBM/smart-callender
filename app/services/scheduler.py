@@ -7,41 +7,54 @@ la programmation par contraintes (Constraint Programming).
 
 from ortools.sat.python import cp_model
 from app.models import Seance, Salle, Utilisateur, Groupe, Indisponibilite
+from app.services.settings_service import SchoolSettingsService
 from app.extensions import db
 from datetime import time, timedelta, date
 
 class SchedulerService:
-    # Créneaux horaires standards (Lundi à Vendredi, 8h-18h)
-    # Format: (jour_index, heure_debut_minutes, duree_minutes)
-    # jour_index: 0=Lundi, 4=Vendredi
     SLOTS = []
     
     @classmethod
-    def init_slots(cls):
-        """Initialise les créneaux horaires possibles."""
+    def _init_slots(cls):
         cls.SLOTS = []
-        # 5 jours x 6 créneaux de 1h30 (90 min)
-        # 08:30, 10:15, 12:00 (pause), 13:30, 15:15, 17:00
-        start_times = [
-            time(8, 30), time(10, 15), 
-            time(13, 30), time(15, 15), time(17, 00)
-        ]
-        for day in range(5): # Lundi - Vendredi
-            for t in start_times:
-                t_min = t.hour * 60 + t.minute
+        working_days = SchoolSettingsService.get_working_days()
+        start_times = SchoolSettingsService.get_slot_times()
+        duration_minutes = SchoolSettingsService.get_slot_duration_minutes()
+        # Prépare des créneaux récurrents par jour configuré.
+        for day in working_days:
+            for start in start_times:
+                t_min = start.hour * 60 + start.minute
                 cls.SLOTS.append({
                     "day": day,
-                    "start": t,
-                    "duration": 90, # 1h30
+                    "start": start,
+                    "duration": duration_minutes,
                     "start_min": t_min
                 })
+    
+    @classmethod
+    def get_slots(cls):
+        """Retourne les créneaux actifs actuels sans muter l'état global."""
+        working_days = SchoolSettingsService.get_working_days()
+        start_times = SchoolSettingsService.get_slot_times()
+        duration_minutes = SchoolSettingsService.get_slot_duration_minutes()
+        slots = []
+        for day in working_days:
+            for start in start_times:
+                t_min = start.hour * 60 + start.minute
+                slots.append({
+                    "day": day,
+                    "start": start,
+                    "duration": duration_minutes,
+                    "start_min": t_min
+                })
+        return slots
 
     @staticmethod
     def generate_schedule():
         """
         Génère l'emploi du temps pour toutes les séances non planifiées (ou toutes).
         """
-        SchedulerService.init_slots()
+        SchedulerService._init_slots()
         model = cp_model.CpModel()
         
         # 1. Récupération des données
@@ -54,8 +67,10 @@ class SchedulerService:
         if not seances_to_plan:
             return "Aucune séance à planifier."
 
-        slots = SchedulerService.SLOTS
+        slots = SchedulerService.get_slots()
         num_slots = len(slots)
+        if num_slots == 0:
+            return "Aucun créneau actif (vérifiez les paramètres de planification)."
         
         # 2. Création des variables
         # x[seance_id, salle_id, slot_index]

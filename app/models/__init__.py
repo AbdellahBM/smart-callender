@@ -6,3 +6,4 @@ from app.models.groupe import Groupe
 from app.models.seance import Seance
 from app.models.reservation import Reservation
 from app.models.indisponibilite import Indisponibilite
+from app.models.school_setting import SchoolSetting

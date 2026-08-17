@@ -7,6 +7,7 @@ en tenant compte des Séances (emploi du temps) et des Réservations acceptées.
 
 from datetime import date, time
 from app.models import Salle, Seance, Reservation
+from app.services.settings_service import SchoolSettingsService
 from app.extensions import db
 
 
@@ -26,15 +27,18 @@ def get_occupied_salle_ids(day_date: date, heure_debut: time, heure_fin: time):
     occupied_ids = set()
     weekday = day_date.weekday()  # 0=Lundi, 6=Dimanche. On utilise 0-4 (Lundi-Vendredi)
 
+    active_days = set(SchoolSettingsService.get_working_days())
+    if weekday not in active_days:
+        return occupied_ids
+
     # Séances récurrentes (même jour de semaine)
-    if weekday < 5:  # Lundi=0 .. Vendredi=4
-        seances = db.session.query(Seance).filter(
-            Seance.jour_semaine == weekday,
-            Seance.salle_id.isnot(None),
-        ).all()
-        for s in seances:
-            if _time_ranges_overlap(s.heure_debut, s.heure_fin, heure_debut, heure_fin):
-                occupied_ids.add(s.salle_id)
+    seances = db.session.query(Seance).filter(
+        Seance.jour_semaine == weekday,
+        Seance.salle_id.isnot(None),
+    ).all()
+    for s in seances:
+        if _time_ranges_overlap(s.heure_debut, s.heure_fin, heure_debut, heure_fin):
+            occupied_ids.add(s.salle_id)
 
     # Réservations acceptées à cette date
     resas = db.session.query(Reservation).filter(

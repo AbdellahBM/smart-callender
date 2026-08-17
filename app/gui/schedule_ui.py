@@ -11,6 +11,7 @@ from app.services.scheduler import SchedulerService
 from app.extensions import db
 from app.models import Seance, Reservation
 from app.services.resource_service import ResourceService
+from app.services.settings_service import SchoolSettingsService
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 
@@ -84,12 +85,13 @@ class ScheduleFrame(ttk.Frame):
         for row in self.tree.get_children():
             self.tree.delete(row)
 
-        jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"]
+        # Garder le rendu aligné avec la configuration école
+        jours = SchoolSettingsService.get_working_day_names()
 
         # Séances récurrentes
         seances = self.get_seances_data()
         for s in seances:
-            jour = jours[s.jour_semaine] if 0 <= s.jour_semaine < 5 else "?"
+            jour = SchoolSettingsService.get_day_name(s.jour_semaine)
             heure = f"{s.heure_debut.strftime('%H:%M')} - {s.heure_fin.strftime('%H:%M')}"
             matiere = s.matiere.nom if s.matiere else "?"
             groupe = s.groupe.nom if s.groupe else "?"
@@ -166,7 +168,7 @@ class ScheduleFrame(ttk.Frame):
         y -= 20
         c.line(50, y+15, 550, y+15)
         
-        jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"]
+        jours = SchoolSettingsService.get_working_day_names()
         seances = self.get_seances_data()
         reservations = self.get_reservations_data()
 
@@ -174,7 +176,7 @@ class ScheduleFrame(ttk.Frame):
             if y < 50:
                 c.showPage()
                 y = height - 50
-            jour = jours[s.jour_semaine] if 0 <= s.jour_semaine < 5 else "?"
+            jour = SchoolSettingsService.get_day_name(s.jour_semaine)
             heure = f"{s.heure_debut.strftime('%H:%M')}-{s.heure_fin.strftime('%H:%M')}"
             matiere = (s.matiere.nom if s.matiere else "?")[:20]
             groupe = s.groupe.nom if s.groupe else "?"

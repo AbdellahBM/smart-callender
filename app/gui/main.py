@@ -8,6 +8,7 @@ from app.gui.auth import LoginFrame
 from app.gui.admin import AdminDashboard
 from app.gui.teacher import TeacherDashboard
 from app.gui.student import StudentDashboard
+from app.services.settings_service import SchoolSettingsService
 
 class DesktopApp:
     def __init__(self, root):
@@ -29,12 +30,13 @@ class DesktopApp:
         self.show_login()
 
     def _ensure_db_seeded(self):
-        """Crée les tables et remplit la base avec les données de démo si elle est vide (exe premier lancement)."""
+        """Crée les tables et initialise les paramètres école par défaut."""
         try:
             db.create_all()
+            SchoolSettingsService.seed_default_settings()
             if db.session.query(Utilisateur).count() == 0:
-                from scripts.seed_db import seed
-                seed()
+                # Ne pas exécuter de seed automatique en production.
+                pass
         except Exception:
             pass
 
