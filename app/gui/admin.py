@@ -2,6 +2,7 @@ import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from tkinter import messagebox, simpledialog
 from app.services.resource_service import ResourceService
+from app.services.auth_service import AuthService
 from app.extensions import db
 from app.models import Reservation
 from app.services.settings_service import SchoolSettingsService
@@ -30,6 +31,8 @@ class AdminDashboard(ttk.Frame):
         self.tab_groupes = ttk.Frame(self.notebook, padding=10)
         self.tab_planning = ttk.Frame(self.notebook, padding=10)
         self.tab_parametres = ttk.Frame(self.notebook, padding=10)
+        self.tab_utilisateurs = ttk.Frame(self.notebook, padding=10)
+        self.tab_classes = ttk.Frame(self.notebook, padding=10)
         
         self.notebook.add(self.tab_dashboard, text="Tableau de bord")
         self.notebook.add(self.tab_planning, text="📅 Planning")
@@ -37,6 +40,8 @@ class AdminDashboard(ttk.Frame):
         self.notebook.add(self.tab_salles, text="🏢 Salles")
         self.notebook.add(self.tab_enseignants, text="👨‍🏫 Enseignants")
         self.notebook.add(self.tab_groupes, text="🎓 Groupes")
+        self.notebook.add(self.tab_utilisateurs, text="👥 Utilisateurs")
+        self.notebook.add(self.tab_classes, text="📘 Filières / Matières")
         self.notebook.add(self.tab_parametres, text="⚙️ Paramètres")
         
         self.setup_dashboard()
@@ -44,6 +49,8 @@ class AdminDashboard(ttk.Frame):
         self.setup_salles()
         self.setup_enseignants()
         self.setup_groupes()
+        self.setup_utilisateurs()
+        self.setup_classes()
         self.setup_parametres()
         
         # Charger le module planning
@@ -133,6 +140,7 @@ class AdminDashboard(ttk.Frame):
         btn_frame = ttk.Frame(self.tab_salles)
         btn_frame.pack(fill="x", pady=(0, 10))
         ttk.Button(btn_frame, text="+ Ajouter Salle", command=self.add_salle, bootstyle="success").pack(side="left")
+        ttk.Button(btn_frame, text="🗑 Supprimer Salle", command=self.delete_selected_salle, bootstyle="danger").pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Rafraîchir", command=self.refresh_salles, bootstyle="info-outline").pack(side="left", padx=5)
         
         columns = ("id", "nom", "type", "capacite")
@@ -151,9 +159,34 @@ class AdminDashboard(ttk.Frame):
 
     def add_salle(self):
         nom = simpledialog.askstring("Ajout Salle", "Nom de la salle:")
-        if nom:
-            ResourceService.create_salle({"nom": nom, "capacite": 30, "type_salle": "cours"})
-            self.refresh_salles()
+        if not nom:
+            return
+        capacite = simpledialog.askinteger("Ajout Salle", "Capacité:", initialvalue=30)
+        if capacite is None:
+            return
+        type_salle = simpledialog.askstring("Ajout Salle", "Type (cours, tp, amphi):", initialvalue="cours")
+        ResourceService.create_salle({
+            "nom": nom,
+            "capacite": capacite,
+            "type_salle": type_salle or "cours",
+        })
+        self.refresh_salles()
+
+    def delete_selected_salle(self):
+        selected = self.tree_salles.selection()
+        if not selected:
+            messagebox.showwarning("Attention", "Sélectionnez une salle.")
+            return
+        values = self.tree_salles.item(selected[0], "values")
+        if not values:
+            return
+        salle_id = int(values[0])
+        if messagebox.askyesno("Confirmer", f"Supprimer la salle {values[1]} ?"):
+            if ResourceService.delete_salle(salle_id):
+                messagebox.showinfo("Succès", "Salle supprimée.")
+                self.refresh_salles()
+            else:
+                messagebox.showerror("Erreur", "Suppression impossible.")
 
     # --- Gestion Enseignants ---
     def setup_enseignants(self):
@@ -173,19 +206,293 @@ class AdminDashboard(ttk.Frame):
 
     # --- Gestion Groupes ---
     def setup_groupes(self):
-        self.tree_groupes = ttk.Treeview(self.tab_groupes, columns=("id", "nom", "effectif"), show="headings", bootstyle="warning")
+        self.tree_groupes = ttk.Treeview(self.tab_groupes, columns=("id", "nom", "effectif", "filiere"), show="headings", bootstyle="warning")
         self.tree_groupes.heading("id", text="ID")
         self.tree_groupes.heading("nom", text="Nom")
         self.tree_groupes.heading("effectif", text="Effectif")
+        self.tree_groupes.heading("filiere", text="Filière")
         self.tree_groupes.column("id", width=50)
         self.tree_groupes.pack(expand=True, fill="both")
+
+        btn_frame = ttk.Frame(self.tab_groupes)
+        btn_frame.pack(fill="x", pady=(10, 0))
+        ttk.Button(btn_frame, text="➕ Ajouter un groupe", command=self.add_groupe, bootstyle="success").pack(side="left")
+        ttk.Button(btn_frame, text="🗑 Supprimer", command=self.delete_selected_groupe, bootstyle="danger").pack(side="left", padx=6)
+
         self.refresh_groupes()
 
     def refresh_groupes(self):
         for row in self.tree_groupes.get_children():
             self.tree_groupes.delete(row)
         for g in ResourceService.get_all_groupes():
-            self.tree_groupes.insert("", "end", values=(g.id, g.nom, g.effectif))
+            filiere_nom = g.filiere.nom if g.filiere else "?"
+            self.tree_groupes.insert("", "end", values=(g.id, g.nom, g.effectif, filiere_nom))
+
+    def add_groupe(self):
+        nom = simpledialog.askstring("Ajouter un groupe", "Nom du groupe:")
+        if not nom:
+            return
+        effectif = simpledialog.askinteger("Ajouter un groupe", "Effectif:", initialvalue=30)
+        if effectif is None:
+            return
+        filieres = ResourceService.get_all_filieres()
+        options = [f"{f.id}: {f.nom}" for f in filieres]
+        if not options:
+            messagebox.showwarning("Attention", "Aucune filière disponible. Créez d'abord une filière.")
+            return
+        choix = simpledialog.askstring("Ajouter un groupe", f"Filière (id): {', '.join(options)}")
+        if not choix:
+            return
+        try:
+            filiere_id = int(choix.split(":")[0])
+        except (ValueError, IndexError):
+            messagebox.showerror("Erreur", "ID filière invalide.")
+            return
+        ResourceService.create_groupe(nom=nom, effectif=effectif, filiere_id=filiere_id)
+        self.refresh_groupes()
+
+    def delete_selected_groupe(self):
+        selected = self.tree_groupes.selection()
+        if not selected:
+            messagebox.showwarning("Attention", "Sélectionnez un groupe.")
+            return
+        values = self.tree_groupes.item(selected[0], "values")
+        if not values:
+            return
+        if messagebox.askyesno("Confirmer", f"Supprimer le groupe {values[1]} ?"):
+            if ResourceService.delete_groupe(int(values[0])):
+                self.refresh_groupes()
+            else:
+                messagebox.showerror("Erreur", "Suppression impossible.")
+
+    # --- Gestion Utilisateurs ---
+    def setup_utilisateurs(self):
+        frame = ttk.Labelframe(self.tab_utilisateurs, text="Comptes", padding=15, bootstyle="secondary")
+        frame.pack(fill="both", expand=True)
+
+        self.tree_users = ttk.Treeview(
+            frame,
+            columns=("id", "nom", "prenom", "email", "role", "groupe", "actif"),
+            show="headings",
+            bootstyle="primary"
+        )
+        self.tree_users.heading("id", text="ID")
+        self.tree_users.heading("nom", text="Nom")
+        self.tree_users.heading("prenom", text="Prénom")
+        self.tree_users.heading("email", text="Email")
+        self.tree_users.heading("role", text="Rôle")
+        self.tree_users.heading("groupe", text="Groupe")
+        self.tree_users.heading("actif", text="Actif")
+        self.tree_users.column("id", width=50)
+        self.tree_users.pack(expand=True, fill="both")
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill="x", pady=(10, 0))
+        ttk.Button(btn_frame, text="➕ Ajouter enseignant", command=self.add_enseignant, bootstyle="success").pack(side="left", padx=(0, 6))
+        ttk.Button(btn_frame, text="➕ Ajouter étudiant", command=self.add_etudiant, bootstyle="success").pack(side="left", padx=(0, 6))
+        ttk.Button(btn_frame, text="🗑 Supprimer", command=self.delete_selected_user, bootstyle="danger").pack(side="left")
+        ttk.Button(btn_frame, text="✅ Activer/Désactiver", command=self.toggle_selected_user, bootstyle="warning").pack(side="left", padx=(6, 0))
+        self.refresh_utilisateurs()
+
+    def refresh_utilisateurs(self):
+        for row in self.tree_users.get_children():
+            self.tree_users.delete(row)
+        for u in AuthService.get_all():
+            groupe_nom = u.groupe.nom if u.groupe else "-"
+            self.tree_users.insert("", "end", values=(u.id, u.nom, u.prenom, u.email, u.role, groupe_nom, "Oui" if u.actif else "Non"))
+
+    def _ask_user_values(self, role):
+        nom = simpledialog.askstring("Créer un compte", "Nom:")
+        if not nom:
+            return None
+        prenom = simpledialog.askstring("Créer un compte", "Prénom:")
+        if not prenom:
+            return None
+        email = simpledialog.askstring("Créer un compte", "Email:")
+        if not email:
+            return None
+        password = simpledialog.askstring("Créer un compte", "Mot de passe initial:")
+        if not password:
+            return None
+        return {
+            "nom": nom,
+            "prenom": prenom,
+            "email": email,
+            "password": password,
+            "role": role,
+        }
+
+    def add_enseignant(self):
+        data = self._ask_user_values("enseignant")
+        if not data:
+            return
+        try:
+            AuthService.create_user(
+                email=data["email"],
+                password=data["password"],
+                nom=data["nom"],
+                prenom=data["prenom"],
+                role="enseignant",
+            )
+            self.refresh_utilisateurs()
+            self.refresh_profs()
+        except Exception as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def add_etudiant(self):
+        data = self._ask_user_values("etudiant")
+        if not data:
+            return
+        groupes = ResourceService.get_all_groupes()
+        options = [f"{g.id}: {g.nom}" for g in groupes]
+        if not options:
+            messagebox.showwarning("Attention", "Aucun groupe disponible.")
+            return
+        choix = simpledialog.askstring("Créer un étudiant", f"Groupe (id): {', '.join(options)}")
+        if not choix:
+            return
+        try:
+            groupe_id = int(choix.split(":")[0])
+        except (ValueError, IndexError):
+            messagebox.showerror("Erreur", "ID de groupe invalide.")
+            return
+        try:
+            AuthService.create_user(
+                email=data["email"],
+                password=data["password"],
+                nom=data["nom"],
+                prenom=data["prenom"],
+                role="etudiant",
+                groupe_id=groupe_id,
+            )
+            self.refresh_utilisateurs()
+            self.refresh_groupes()
+        except Exception as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def delete_selected_user(self):
+        selected = self.tree_users.selection()
+        if not selected:
+            messagebox.showwarning("Attention", "Sélectionnez un utilisateur.")
+            return
+        values = self.tree_users.item(selected[0], "values")
+        if not values:
+            return
+        user_id = int(values[0])
+        if user_id == self.user.id:
+            messagebox.showwarning("Attention", "Vous ne pouvez pas supprimer votre propre compte.")
+            return
+        if messagebox.askyesno("Confirmer", "Supprimer cet utilisateur ?"):
+            if AuthService.delete_user(user_id):
+                self.refresh_utilisateurs()
+                self.refresh_profs()
+                self.refresh_groupes()
+                self.refresh_reservations()
+            else:
+                messagebox.showerror("Erreur", "Suppression impossible (compte référencé).")
+
+    def toggle_selected_user(self):
+        selected = self.tree_users.selection()
+        if not selected:
+            messagebox.showwarning("Attention", "Sélectionnez un utilisateur.")
+            return
+        values = self.tree_users.item(selected[0], "values")
+        if not values:
+            return
+        user_id = int(values[0])
+        if user_id == self.user.id:
+            messagebox.showwarning("Attention", "Vous ne pouvez pas désactiver votre propre compte.")
+            return
+        current_status = str(values[6]).strip().lower() in {"oui", "true", "1"}
+        if AuthService.set_status(user_id, not current_status):
+            self.refresh_utilisateurs()
+        else:
+            messagebox.showerror("Erreur", "Impossible de modifier le statut.")
+
+    # --- Gestion Filières / Matières ---
+    def setup_classes(self):
+        frame = ttk.Labelframe(self.tab_classes, text="Filières et matières", padding=15, bootstyle="warning")
+        frame.pack(fill="both", expand=True)
+
+        toolbar = ttk.Frame(frame)
+        toolbar.pack(fill="x", pady=(0, 10))
+        ttk.Button(toolbar, text="➕ Ajouter filière", command=self.add_filiere, bootstyle="success").pack(side="left", padx=(0, 6))
+        ttk.Button(toolbar, text="➕ Ajouter matière", command=self.add_matiere, bootstyle="success").pack(side="left", padx=(0, 6))
+
+        self.tree_classes = ttk.Treeview(frame, columns=("id", "nom", "type", "detail"), show="headings", bootstyle="warning")
+        self.tree_classes.heading("id", text="ID")
+        self.tree_classes.heading("nom", text="Nom")
+        self.tree_classes.heading("type", text="Type")
+        self.tree_classes.heading("detail", text="Détail")
+        self.tree_classes.column("id", width=50)
+        self.tree_classes.pack(expand=True, fill="both")
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill="x", pady=(10, 0))
+        ttk.Button(btn_frame, text="🗑 Supprimer sélection", command=self.delete_selected_class_item, bootstyle="danger").pack(side="left")
+
+        self.refresh_classes()
+
+    def refresh_classes(self):
+        for row in self.tree_classes.get_children():
+            self.tree_classes.delete(row)
+        for f in ResourceService.get_all_filieres():
+            self.tree_classes.insert("", "end", values=(f"f-{f.id}", f.nom, "Filière", f.code or ""))
+        for m in ResourceService.get_all_matieres():
+            filiere_nom = m.filiere.nom if m.filiere else "Générale"
+            self.tree_classes.insert("", "end", values=(f"m-{m.id}", m.nom, "Matière", filiere_nom))
+
+    def add_filiere(self):
+        nom = simpledialog.askstring("Ajouter une filière", "Nom :")
+        if not nom:
+            return
+        code = simpledialog.askstring("Ajouter une filière", "Code :", initialvalue="")
+        ResourceService.create_filiere(nom=nom, code=code or None)
+        self.refresh_classes()
+        self.refresh_groupes()
+
+    def add_matiere(self):
+        nom = simpledialog.askstring("Ajouter une matière", "Nom :")
+        if not nom:
+            return
+        code = simpledialog.askstring("Ajouter une matière", "Code :", initialvalue="")
+        filieres = ResourceService.get_all_filieres()
+        filiere_id = None
+        if filieres:
+            choix = simpledialog.askstring("Ajouter une matière", f"Filière (id): {', '.join(f'{f.id}: {f.nom}' for f in filieres)}")
+            if choix:
+                try:
+                    filiere_id = int(choix.split(":")[0])
+                except (ValueError, IndexError):
+                    messagebox.showerror("Erreur", "ID de filière invalide.")
+                    return
+        ResourceService.create_matiere(nom=nom, code=code, filiere_id=filiere_id)
+        self.refresh_classes()
+
+    def delete_selected_class_item(self):
+        selected = self.tree_classes.selection()
+        if not selected:
+            messagebox.showwarning("Attention", "Sélectionnez un élément.")
+            return
+        selected_value = self.tree_classes.item(selected[0], "values")
+        if not selected_value:
+            return
+        prefix = str(selected_value[0])
+        if prefix.startswith("f-"):
+            filiere_id = int(prefix.replace("f-", ""))
+            if messagebox.askyesno("Confirmer", f"Supprimer la filière {selected_value[1]} ?"):
+                if not ResourceService.delete_filiere(filiere_id):
+                    messagebox.showerror("Erreur", "Suppression impossible (dépendances existantes).")
+                    return
+        elif prefix.startswith("m-"):
+            matiere_id = int(prefix.replace("m-", ""))
+            if messagebox.askyesno("Confirmer", f"Supprimer la matière {selected_value[1]} ?"):
+                if not ResourceService.delete_matiere(matiere_id):
+                    messagebox.showerror("Erreur", "Suppression impossible (dépendances existantes).")
+                    return
+                self.refresh_groupes()
+        self.refresh_classes()
+        self.refresh_groupes()
 
     # --- Paramètres planning ---
     def setup_parametres(self):

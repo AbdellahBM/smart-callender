@@ -6,6 +6,7 @@ Gère les opérations CRUD pour les Salles, Enseignants, Groupes, Matières, Fil
 
 from app.models import Salle, Groupe, Matiere, Filiere, Utilisateur
 from app.extensions import db
+from sqlalchemy.exc import IntegrityError
 
 class ResourceService:
     # --- SALLES ---
@@ -42,9 +43,13 @@ class ResourceService:
     def delete_salle(salle_id):
         salle = db.session.get(Salle, salle_id)
         if salle:
-            db.session.delete(salle)
-            db.session.commit()
-            return True
+            try:
+                db.session.delete(salle)
+                db.session.commit()
+                return True
+            except IntegrityError:
+                db.session.rollback()
+                return False
         return False
 
     # --- ENSEIGNANTS ---
@@ -64,12 +69,76 @@ class ResourceService:
         db.session.commit()
         return groupe
 
+    @staticmethod
+    def delete_groupe(groupe_id):
+        groupe = db.session.get(Groupe, groupe_id)
+        if groupe:
+            try:
+                db.session.delete(groupe)
+                db.session.commit()
+                return True
+            except IntegrityError:
+                db.session.rollback()
+                return False
+        return False
+
     # --- MATIERES ---
     @staticmethod
     def get_all_matieres():
         return db.session.query(Matiere).order_by(Matiere.nom).all()
 
+    @staticmethod
+    def create_matiere(nom, code=None, filiere_id=None, volume_cours=0, volume_tp=0, volume_td=0, duree=90):
+        if filiere_id is not None and db.session.get(Filiere, filiere_id) is None:
+            raise ValueError("La filière sélectionnée n'existe pas.")
+        matiere = Matiere(
+            nom=nom,
+            code=code,
+            volume_horaire_cours=volume_cours,
+            volume_horaire_td=volume_td,
+            volume_horaire_tp=volume_tp,
+            duree_seance_default=duree,
+            filiere_id=filiere_id,
+        )
+        db.session.add(matiere)
+        db.session.commit()
+        return matiere
+
+    @staticmethod
+    def delete_matiere(matiere_id):
+        matiere = db.session.get(Matiere, matiere_id)
+        if matiere:
+            try:
+                matiere.enseignants.clear()
+                db.session.delete(matiere)
+                db.session.commit()
+                return True
+            except IntegrityError:
+                db.session.rollback()
+                return False
+        return False
+
     # --- FILIERES ---
     @staticmethod
     def get_all_filieres():
         return db.session.query(Filiere).order_by(Filiere.nom).all()
+
+    @staticmethod
+    def create_filiere(nom, code=None):
+        filiere = Filiere(nom=nom, code=code)
+        db.session.add(filiere)
+        db.session.commit()
+        return filiere
+
+    @staticmethod
+    def delete_filiere(filiere_id):
+        filiere = db.session.get(Filiere, filiere_id)
+        if filiere:
+            try:
+                db.session.delete(filiere)
+                db.session.commit()
+                return True
+            except IntegrityError:
+                db.session.rollback()
+                return False
+        return False

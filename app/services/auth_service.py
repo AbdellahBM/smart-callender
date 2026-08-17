@@ -6,6 +6,7 @@ Gère la vérification des identifiants et la gestion des utilisateurs.
 
 from app.models.utilisateur import Utilisateur
 from app.extensions import db, bcrypt
+from sqlalchemy.exc import IntegrityError
 
 class AuthService:
     @staticmethod
@@ -22,6 +23,8 @@ class AuthService:
         """
         user = db.session.query(Utilisateur).filter_by(email=email.lower().strip()).first()
         if user and user.check_password(password):
+            if not user.actif:
+                raise ValueError("Ce compte est désactivé. Contactez l'administrateur.")
             return user
         return None
 
@@ -49,3 +52,44 @@ class AuthService:
         db.session.add(user)
         db.session.commit()
         return user
+
+    @staticmethod
+    def get_all():
+        return Utilisateur.query.order_by(Utilisateur.nom, Utilisateur.prenom).all()
+
+    @staticmethod
+    def get_by_id(user_id):
+        return db.session.get(Utilisateur, int(user_id))
+
+    @staticmethod
+    def delete_user(user_id):
+        user = AuthService.get_by_id(user_id)
+        if not user:
+            return False
+        admin_count = db.session.query(Utilisateur).filter_by(role="admin").count()
+        if user.role == "admin" and admin_count <= 1:
+            return False
+        try:
+            db.session.delete(user)
+            db.session.commit()
+            return True
+        except IntegrityError:
+            db.session.rollback()
+            return False
+
+    @staticmethod
+    def set_status(user_id, actif):
+        user = AuthService.get_by_id(user_id)
+        if not user:
+            return False
+        if user.role == "admin" and not actif:
+            admin_count = db.session.query(Utilisateur).filter_by(role="admin", actif=True).count()
+            if admin_count <= 1:
+                return False
+        user.actif = bool(actif)
+        try:
+            db.session.commit()
+            return True
+        except IntegrityError:
+            db.session.rollback()
+            return False
