@@ -1,11 +1,12 @@
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from tkinter import messagebox, simpledialog
+from datetime import datetime
 from app.services.resource_service import ResourceService
 from app.services.auth_service import AuthService
 from app.extensions import db
-from app.models import Reservation
-from app.models.utilisateur import Utilisateur
+from app.models import Reservation, Utilisateur
+from app.services.room_service import get_occupied_salle_ids
 from app.services.settings_service import SchoolSettingsService
 
 class AdminDashboard(ttk.Frame):
@@ -90,15 +91,31 @@ class AdminDashboard(ttk.Frame):
         # Toolbar
         btn_frame = ttk.Frame(self.tab_reservations)
         btn_frame.pack(fill="x", pady=(0, 10))
+
+        ttk.Label(btn_frame, text="Statut:").pack(side="left", padx=(0, 6))
+        self.reservation_status_filter = ttk.Combobox(
+            btn_frame,
+            values=["Toutes", "En attente", "Acceptée", "Refusée"],
+            state="readonly",
+            width=14,
+        )
+        self.reservation_status_filter.set("Toutes")
+        self.reservation_status_filter.pack(side="left")
+        self.reservation_status_filter.bind("<<ComboboxSelected>>", lambda *_: self.refresh_reservations())
         
         ttk.Button(btn_frame, text="✅ Valider", command=self.valider_reservation, bootstyle="success").pack(side="left", padx=5)
         ttk.Button(btn_frame, text="❌ Refuser", command=self.refuser_reservation, bootstyle="danger").pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="↩️ Remettre en attente", command=self.reinitialiser_reservation, bootstyle="warning").pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="📝 Modifier", command=self.edit_selected_reservation, bootstyle="info").pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="❌ Supprimer", command=self.delete_selected_reservation, bootstyle="danger").pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="➕ Ajouter", command=self.add_reservation_direct, bootstyle="success").pack(side="left", padx=5)
         ttk.Button(btn_frame, text="🔄 Rafraîchir", command=self.refresh_reservations, bootstyle="info-outline").pack(side="left", padx=5)
         
-        cols = ("id", "prof", "date", "heure", "salle", "statut", "motif")
+        cols = ("id", "prof", "enseignant_id", "date", "heure", "salle", "statut", "motif", "commentaire_admin")
         self.tree_res = ttk.Treeview(self.tab_reservations, columns=cols, show="headings", bootstyle="primary")
         for col in cols: self.tree_res.heading(col, text=col.capitalize())
         self.tree_res.column("id", width=50)
+        self.tree_res.column("enseignant_id", width=30)
         self.tree_res.pack(expand=True, fill="both")
         
         self.refresh_reservations()
@@ -107,12 +124,35 @@ class AdminDashboard(ttk.Frame):
         for row in self.tree_res.get_children():
             self.tree_res.delete(row)
         
-        res_list = db.session.query(Reservation).order_by(Reservation.date_reservation).all()
+        query = db.session.query(Reservation).order_by(Reservation.date_reservation, Reservation.heure_debut)
+        status_filter = self.reservation_status_filter.get()
+        if status_filter == "En attente":
+            query = query.filter_by(statut="en_attente")
+        elif status_filter == "Acceptée":
+            query = query.filter_by(statut="acceptee")
+        elif status_filter == "Refusée":
+            query = query.filter_by(statut="refusee")
+        res_list = query.all()
+
         for r in res_list:
             prof_nom = r.demandeur.nom if r.demandeur else "?"
             salle_nom = r.salle.nom if r.salle else "?"
             # Tag rows based on status? Treeview tags need configuration, keeping simple for now
-            self.tree_res.insert("", "end", values=(r.id, prof_nom, r.date_reservation, f"{r.heure_debut}-{r.heure_fin}", salle_nom, r.statut, r.motif))
+            self.tree_res.insert(
+                "",
+                "end",
+                values=(
+                    r.id,
+                    prof_nom,
+                    r.enseignant_id,
+                    r.date_reservation.strftime("%d/%m/%Y") if r.date_reservation else "",
+                    f"{r.heure_debut.strftime('%H:%M')}-{r.heure_fin.strftime('%H:%M')}",
+                    salle_nom,
+                    r.statut,
+                    r.motif or "",
+                    r.commentaire_admin or "",
+                ),
+            )
 
     def get_selected_reservation(self):
         selected = self.tree_res.selection()
@@ -122,25 +162,277 @@ class AdminDashboard(ttk.Frame):
         item = self.tree_res.item(selected[0])
         return item['values'][0]
 
+    def _parse_date(self, value):
+        value = str(value).strip()
+        if not value:
+            raise ValueError("La date est obligatoire.")
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(value, fmt).date()
+            except ValueError:
+                pass
+        raise ValueError("Date invalide. Format attendu: JJ/MM/AAAA.")
+
+    def _parse_time(self, value):
+        value = str(value).strip()
+        if not value:
+            raise ValueError("L'heure est obligatoire.")
+        for fmt in ("%H:%M", "%H:%M:%S"):
+            try:
+                return datetime.strptime(value, fmt).time()
+            except ValueError:
+                pass
+        raise ValueError("Heure invalide. Format attendu: HH:MM.")
+
+    def _extract_id(self, raw, label):
+        try:
+            return int(str(raw).split(":")[0].strip())
+        except (ValueError, IndexError):
+            raise ValueError(f"{label} invalide.")
+
+    def _set_reservation_status(self, reservation_id, statut, commentaire_admin=None):
+        res = db.session.get(Reservation, reservation_id)
+        if not res:
+            return False
+        if statut == "acceptee" and res.statut != "acceptee":
+            occupied = get_occupied_salle_ids(res.date_reservation, res.heure_debut, res.heure_fin)
+            if res.salle_id in occupied:
+                raise ValueError(
+                    "La salle est déjà occupée pour ce créneau (emploi du temps ou autre réservation acceptée)."
+                )
+        res.statut = statut
+        if commentaire_admin is not None:
+            res.commentaire_admin = commentaire_admin.strip() or None
+        db.session.commit()
+        return True
+
     def valider_reservation(self):
         res_id = self.get_selected_reservation()
         if res_id:
-            res = db.session.get(Reservation, res_id)
-            if res:
-                res.statut = "acceptee"
-                db.session.commit()
-                messagebox.showinfo("Succès", "Réservation acceptée.")
-                self.refresh_reservations()
+            try:
+                comment = simpledialog.askstring("Valider réservation", "Commentaire admin (optionnel):")
+                if self._set_reservation_status(res_id, "acceptee", comment):
+                    messagebox.showinfo("Succès", "Réservation acceptée.")
+                    self.refresh_reservations()
+            except Exception as exc:
+                messagebox.showerror("Erreur", str(exc))
 
     def refuser_reservation(self):
         res_id = self.get_selected_reservation()
         if res_id:
-            res = db.session.get(Reservation, res_id)
-            if res:
-                res.statut = "refusee"
-                db.session.commit()
-                messagebox.showinfo("Succès", "Réservation refusée.")
-                self.refresh_reservations()
+            try:
+                comment = simpledialog.askstring("Refuser réservation", "Raison du refus :")
+                if comment is None:
+                    return
+                if self._set_reservation_status(res_id, "refusee", comment):
+                    messagebox.showinfo("Succès", "Réservation refusée.")
+                    self.refresh_reservations()
+            except Exception as exc:
+                messagebox.showerror("Erreur", str(exc))
+
+    def reinitialiser_reservation(self):
+        res_id = self.get_selected_reservation()
+        if res_id:
+            try:
+                if self._set_reservation_status(res_id, "en_attente", None):
+                    messagebox.showinfo("Succès", "Statut remis en attente.")
+                    self.refresh_reservations()
+            except Exception as exc:
+                messagebox.showerror("Erreur", str(exc))
+
+    def delete_selected_reservation(self):
+        res_id = self.get_selected_reservation()
+        if not res_id:
+            return
+        if not messagebox.askyesno("Confirmer", "Supprimer cette réservation ?"):
+            return
+        res = db.session.get(Reservation, res_id)
+        if not res:
+            messagebox.showerror("Erreur", "Réservation introuvable.")
+            return
+        db.session.delete(res)
+        db.session.commit()
+        messagebox.showinfo("Succès", "Réservation supprimée.")
+        self.refresh_reservations()
+
+    def edit_selected_reservation(self):
+        res_id = self.get_selected_reservation()
+        if not res_id:
+            return
+
+        res = db.session.get(Reservation, res_id)
+        if not res:
+            messagebox.showerror("Erreur", "Réservation introuvable.")
+            return
+
+        enseignants = AuthService.get_all()
+        enseignant_opts = [f"{u.id}: {u.nom} {u.prenom} ({u.email})" for u in enseignants if u.role == "enseignant"]
+        if not enseignant_opts:
+            messagebox.showerror("Erreur", "Aucun enseignant disponible.")
+            return
+        enseignant_input = simpledialog.askstring(
+            "Modifier réservation",
+            f"Enseignant (id): {', '.join(enseignant_opts)}",
+            initialvalue=f"{res.enseignant_id}: {res.demandeur.nom if res.demandeur else 'utilisateur'}",
+        )
+        if enseignant_input is None:
+            return
+
+        salle_opts = [f"{s.id}: {s.nom}" for s in ResourceService.get_all_salles()]
+        if not salle_opts:
+            messagebox.showerror("Erreur", "Aucune salle disponible.")
+            return
+        salle_input = simpledialog.askstring(
+            "Modifier réservation",
+            f"Salle (id): {', '.join(salle_opts)}",
+            initialvalue=f"{res.salle_id}: {res.salle.nom if res.salle else ''}",
+        )
+        if salle_input is None:
+            return
+
+        date_input = simpledialog.askstring(
+            "Modifier réservation",
+            "Date (JJ/MM/AAAA):",
+            initialvalue=res.date_reservation.strftime('%d/%m/%Y') if res.date_reservation else "",
+        )
+        if date_input is None:
+            return
+
+        heure_debut_input = simpledialog.askstring(
+            "Modifier réservation",
+            "Heure début (HH:MM):",
+            initialvalue=res.heure_debut.strftime('%H:%M') if res.heure_debut else "",
+        )
+        if heure_debut_input is None:
+            return
+
+        heure_fin_input = simpledialog.askstring(
+            "Modifier réservation",
+            "Heure fin (HH:MM):",
+            initialvalue=res.heure_fin.strftime('%H:%M') if res.heure_fin else "",
+        )
+        if heure_fin_input is None:
+            return
+
+        motif_input = simpledialog.askstring("Modifier réservation", "Motif:", initialvalue=res.motif or "")
+        if motif_input is None:
+            return
+
+        commentaire_input = simpledialog.askstring(
+            "Modifier réservation",
+            "Commentaire admin:",
+            initialvalue=res.commentaire_admin or "",
+        )
+        if commentaire_input is None:
+            return
+
+        statut_input = simpledialog.askstring("Modifier réservation", "Statut (en_attente/acceptee/refusee):", initialvalue=res.statut)
+        if statut_input is None:
+            return
+        statut_input = statut_input.strip().lower()
+        if statut_input not in {"en_attente", "acceptee", "refusee"}:
+            messagebox.showerror("Erreur", "Statut invalide.")
+            return
+
+        try:
+            date_reservation = self._parse_date(date_input)
+            heure_debut = self._parse_time(heure_debut_input)
+            heure_fin = self._parse_time(heure_fin_input)
+            if heure_debut >= heure_fin:
+                messagebox.showerror("Erreur", "L'heure de fin doit être après l'heure de début.")
+                return
+            enseignant_id = self._extract_id(enseignant_input, "Enseignant")
+            salle_id = self._extract_id(salle_input, "Salle")
+
+            res.enseignant_id = enseignant_id
+            res.salle_id = salle_id
+            res.date_reservation = date_reservation
+            res.heure_debut = heure_debut
+            res.heure_fin = heure_fin
+            res.motif = motif_input
+            res.commentaire_admin = commentaire_input.strip() or None
+
+            if statut_input == "acceptee" and res.statut != "acceptee":
+                occupied = get_occupied_salle_ids(date_reservation, heure_debut, heure_fin)
+                if salle_id in occupied:
+                    messagebox.showerror(
+                        "Conflit",
+                        "Cette salle est déjà occupée sur ce créneau. Réservation non modifiée."
+                    )
+                    return
+
+            res.statut = statut_input
+            db.session.commit()
+            self.refresh_reservations()
+            messagebox.showinfo("Succès", "Réservation mise à jour.")
+        except Exception as exc:
+            db.session.rollback()
+            messagebox.showerror("Erreur", str(exc))
+
+    def add_reservation_direct(self):
+        enseignants = AuthService.get_all()
+        enseignant_opts = [f"{u.id}: {u.nom} {u.prenom} ({u.email})" for u in enseignants if u.role == "enseignant"]
+        if not enseignant_opts:
+            messagebox.showerror("Erreur", "Aucun enseignant disponible.")
+            return
+        enseignant_input = simpledialog.askstring("Ajouter une réservation", f"Enseignant (id): {', '.join(enseignant_opts)}")
+        if enseignant_input is None:
+            return
+        salles = ResourceService.get_all_salles()
+        salle_opts = [f"{s.id}: {s.nom}" for s in salles]
+        if not salle_opts:
+            messagebox.showerror("Erreur", "Aucune salle disponible.")
+            return
+        salle_input = simpledialog.askstring("Ajouter une réservation", f"Salle (id): {', '.join(salle_opts)}")
+        if salle_input is None:
+            return
+        date_input = simpledialog.askstring("Ajouter une réservation", "Date (JJ/MM/AAAA):", initialvalue=datetime.now().strftime('%d/%m/%Y'))
+        if date_input is None:
+            return
+        heure_debut_input = simpledialog.askstring("Ajouter une réservation", "Heure début (HH:MM):", initialvalue="08:30")
+        if heure_debut_input is None:
+            return
+        heure_fin_input = simpledialog.askstring("Ajouter une réservation", "Heure fin (HH:MM):", initialvalue="10:00")
+        if heure_fin_input is None:
+            return
+        motif_input = simpledialog.askstring("Ajouter une réservation", "Motif (optionnel):")
+        if motif_input is None:
+            return
+
+        try:
+            enseignant_id = self._extract_id(enseignant_input, "Enseignant")
+            salle_id = self._extract_id(salle_input, "Salle")
+            date_reservation = self._parse_date(date_input)
+            heure_debut = self._parse_time(heure_debut_input)
+            heure_fin = self._parse_time(heure_fin_input)
+            if heure_debut >= heure_fin:
+                raise ValueError("L'heure de fin doit être après l'heure de début.")
+
+            occupied = get_occupied_salle_ids(date_reservation, heure_debut, heure_fin)
+            if salle_id in occupied:
+                if not messagebox.askyesno(
+                    "Conflit détecté",
+                    "La salle est déjà occupée sur ce créneau. Créer quand même la demande en attente ?"
+                ):
+                    return
+
+            db.session.add(
+                Reservation(
+                    enseignant_id=enseignant_id,
+                    salle_id=salle_id,
+                    date_reservation=date_reservation,
+                    heure_debut=heure_debut,
+                    heure_fin=heure_fin,
+                    motif=motif_input,
+                    statut="en_attente",
+                )
+            )
+            db.session.commit()
+            self.refresh_reservations()
+            messagebox.showinfo("Succès", "Réservation créée.")
+        except Exception as exc:
+            db.session.rollback()
+            messagebox.showerror("Erreur", str(exc))
 
     # --- Gestion Salles ---
     def setup_salles(self):
