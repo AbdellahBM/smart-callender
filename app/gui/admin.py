@@ -1,7 +1,7 @@
 import csv
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
-from tkinter import filedialog, messagebox, simpledialog
+from tkinter import BooleanVar, filedialog, messagebox, simpledialog
 from datetime import datetime
 from app.services.resource_service import ResourceService
 from app.services.auth_service import AuthService
@@ -1175,24 +1175,65 @@ class AdminDashboard(ttk.Frame):
         ttk.Label(frame, text="Jours actifs (0=Lundi ... 6=Dimanche, séparés par des virgules)").pack(anchor="w")
         self.setting_work_days = ttk.Entry(frame, width=40)
         self.setting_work_days.pack(fill="x", pady=(0, 10))
-        self.setting_work_days.insert(0, ", ".join(str(d) for d in SchoolSettingsService.get_working_days()))
 
         # Créneaux actifs
         ttk.Label(frame, text="Créneaux (HH:MM, séparés par des virgules)").pack(anchor="w")
         slot_times = SchoolSettingsService.get_slot_times()
         self.setting_slot_times = ttk.Entry(frame, width=40)
         self.setting_slot_times.pack(fill="x", pady=(0, 10))
-        self.setting_slot_times.insert(0, ", ".join(t.strftime("%H:%M") for t in slot_times))
 
         # Durée des créneaux
         ttk.Label(frame, text="Durée d'un créneau (minutes)").pack(anchor="w")
         self.setting_slot_duration = ttk.Entry(frame, width=15)
         self.setting_slot_duration.pack(anchor="w", pady=(0, 10))
-        self.setting_slot_duration.insert(0, str(SchoolSettingsService.get_slot_duration_minutes()))
+
+        profile_frame = ttk.Labelframe(self.tab_parametres, text="Paramètres école", padding=15, bootstyle="info")
+        profile_frame.pack(fill="x", pady=(0, 20))
+
+        ttk.Label(profile_frame, text="Nom de l'établissement").pack(anchor="w")
+        self.setting_school_name = ttk.Entry(profile_frame, width=50)
+        self.setting_school_name.pack(fill="x", pady=(0, 10))
+
+        ttk.Label(profile_frame, text="Année scolaire (ex: 2026-2027)").pack(anchor="w")
+        self.setting_academic_year = ttk.Entry(profile_frame, width=30)
+        self.setting_academic_year.pack(anchor="w", pady=(0, 10))
+
+        ttk.Label(profile_frame, text="Début période (AAAA-MM-DD)").pack(anchor="w")
+        self.setting_term_start = ttk.Entry(profile_frame, width=20)
+        self.setting_term_start.pack(anchor="w", pady=(0, 10))
+
+        ttk.Label(profile_frame, text="Fin période (AAAA-MM-DD)").pack(anchor="w")
+        self.setting_term_end = ttk.Entry(profile_frame, width=20)
+        self.setting_term_end.pack(anchor="w", pady=(0, 10))
+
+        ttk.Label(profile_frame, text="Vacances (dates séparées par des virgules, AAAA-MM-DD)").pack(anchor="w")
+        self.setting_holidays = ttk.Entry(profile_frame, width=60)
+        self.setting_holidays.pack(fill="x", pady=(0, 10))
+
+        ttk.Label(profile_frame, text="Nb max de demandes par enseignant par jour (0 = illimité)").pack(anchor="w")
+        self.setting_max_daily_reservations = ttk.Entry(profile_frame, width=12)
+        self.setting_max_daily_reservations.pack(anchor="w", pady=(0, 10))
+
+        ttk.Label(profile_frame, text="Préavis minimum pour une demande (jours)").pack(anchor="w")
+        self.setting_min_booking_notice = ttk.Entry(profile_frame, width=12)
+        self.setting_min_booking_notice.pack(anchor="w", pady=(0, 10))
+
+        self.setting_allow_booking_in_holidays = BooleanVar(value=SchoolSettingsService.get_allow_booking_in_holidays())
+        ttk.Checkbutton(
+            profile_frame,
+            text="Autoriser les demandes durant les vacances",
+            variable=self.setting_allow_booking_in_holidays,
+            bootstyle="round-toggle",
+        ).pack(anchor="w", pady=(0, 6))
 
         btn_frame = ttk.Frame(frame)
         btn_frame.pack(fill="x", pady=(5, 0))
-        ttk.Button(btn_frame, text="💾 Enregistrer les paramètres", command=self.save_planning_parameters, bootstyle="success").pack(side="left", padx=(0, 8))
+        ttk.Button(
+            btn_frame,
+            text="💾 Enregistrer les paramètres",
+            command=self.save_admin_settings,
+            bootstyle="success",
+        ).pack(side="left", padx=(0, 8))
         ttk.Button(btn_frame, text="🔄 Recharger", command=self.refresh_parameters_view, bootstyle="info").pack(side="left")
 
         self.refresh_parameters_view()
@@ -1201,29 +1242,62 @@ class AdminDashboard(ttk.Frame):
         self.setting_work_days.delete(0, "end")
         self.setting_slot_times.delete(0, "end")
         self.setting_slot_duration.delete(0, "end")
+        self.setting_school_name.delete(0, "end")
+        self.setting_academic_year.delete(0, "end")
+        self.setting_term_start.delete(0, "end")
+        self.setting_term_end.delete(0, "end")
+        self.setting_holidays.delete(0, "end")
+        self.setting_max_daily_reservations.delete(0, "end")
+        self.setting_min_booking_notice.delete(0, "end")
 
         self.setting_work_days.insert(0, ", ".join(str(d) for d in SchoolSettingsService.get_working_days()))
         self.setting_slot_times.insert(0, ", ".join(t.strftime("%H:%M") for t in SchoolSettingsService.get_slot_times()))
         self.setting_slot_duration.insert(0, str(SchoolSettingsService.get_slot_duration_minutes()))
+        self.setting_school_name.insert(0, SchoolSettingsService.get_school_name())
+        self.setting_academic_year.insert(0, SchoolSettingsService.get_academic_year())
+        term_start = SchoolSettingsService.get_term_start()
+        term_end = SchoolSettingsService.get_term_end()
+        self.setting_term_start.insert(0, term_start.isoformat() if term_start else "")
+        self.setting_term_end.insert(0, term_end.isoformat() if term_end else "")
+        self.setting_holidays.insert(0, SchoolSettingsService.get_holidays_text())
+        self.setting_max_daily_reservations.insert(0, str(SchoolSettingsService.get_max_daily_reservations_per_teacher()))
+        self.setting_min_booking_notice.insert(0, str(SchoolSettingsService.get_min_booking_notice_days()))
+        self.setting_allow_booking_in_holidays.set(SchoolSettingsService.get_allow_booking_in_holidays())
 
     def save_planning_parameters(self):
+        self.save_admin_settings()
+
+    def save_admin_settings(self):
         work_days = self.setting_work_days.get().strip()
         slot_times = self.setting_slot_times.get().strip()
         slot_duration = self.setting_slot_duration.get().strip()
+        school_name = self.setting_school_name.get().strip()
+        academic_year = self.setting_academic_year.get().strip()
+        term_start = self.setting_term_start.get().strip()
+        term_end = self.setting_term_end.get().strip()
+        holidays = self.setting_holidays.get().strip()
+        max_daily_reservations = self.setting_max_daily_reservations.get().strip()
+        min_booking_notice = self.setting_min_booking_notice.get().strip()
+        allow_booking_in_holidays = self.setting_allow_booking_in_holidays.get()
         try:
-            previous = (
-                SchoolSettingsService.get_working_days(),
-                [t.strftime("%H:%M") for t in SchoolSettingsService.get_slot_times()],
-                str(SchoolSettingsService.get_slot_duration_minutes()),
-            )
             SchoolSettingsService.set_planning_settings(work_days, slot_times, slot_duration)
-            self._record_admin_action(
-                "planning.updated",
-                "planning",
-                None,
-                f"before={previous} -> after=({work_days}; {slot_times}; {slot_duration})",
+            SchoolSettingsService.set_school_settings(
+                school_name,
+                academic_year,
+                term_start,
+                term_end,
+                holidays,
+                max_daily_reservations,
+                min_booking_notice,
+                allow_booking_in_holidays,
             )
-            messagebox.showinfo("Succès", "Paramètres planification enregistrés.")
+            self._record_admin_action(
+                "school_settings.updated",
+                "school",
+                None,
+                "paramètres établissement enregistrés",
+            )
+            messagebox.showinfo("Succès", "Paramètres de planification et école enregistrés.")
             self.refresh_parameters_view()
         except Exception as exc:
             messagebox.showerror("Erreur", str(exc))
@@ -1338,3 +1412,4 @@ class AdminDashboard(ttk.Frame):
             messagebox.showinfo("Succès", "Journal exporté en CSV.")
         except Exception as exc:
             messagebox.showerror("Erreur", str(exc))
+
