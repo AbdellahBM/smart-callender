@@ -85,9 +85,6 @@ class ScheduleFrame(ttk.Frame):
         for row in self.tree.get_children():
             self.tree.delete(row)
 
-        # Garder le rendu aligné avec la configuration école
-        jours = SchoolSettingsService.get_working_day_names()
-
         # Séances récurrentes
         seances = self.get_seances_data()
         for s in seances:
@@ -168,7 +165,6 @@ class ScheduleFrame(ttk.Frame):
         y -= 20
         c.line(50, y+15, 550, y+15)
         
-        jours = SchoolSettingsService.get_working_day_names()
         seances = self.get_seances_data()
         reservations = self.get_reservations_data()
 

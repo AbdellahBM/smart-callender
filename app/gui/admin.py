@@ -4,6 +4,7 @@ from tkinter import messagebox, simpledialog
 from app.services.resource_service import ResourceService
 from app.extensions import db
 from app.models import Reservation
+from app.services.settings_service import SchoolSettingsService
 
 class AdminDashboard(ttk.Frame):
     def __init__(self, parent, controller, user):
@@ -28,6 +29,7 @@ class AdminDashboard(ttk.Frame):
         self.tab_enseignants = ttk.Frame(self.notebook, padding=10)
         self.tab_groupes = ttk.Frame(self.notebook, padding=10)
         self.tab_planning = ttk.Frame(self.notebook, padding=10)
+        self.tab_parametres = ttk.Frame(self.notebook, padding=10)
         
         self.notebook.add(self.tab_dashboard, text="Tableau de bord")
         self.notebook.add(self.tab_planning, text="📅 Planning")
@@ -35,12 +37,14 @@ class AdminDashboard(ttk.Frame):
         self.notebook.add(self.tab_salles, text="🏢 Salles")
         self.notebook.add(self.tab_enseignants, text="👨‍🏫 Enseignants")
         self.notebook.add(self.tab_groupes, text="🎓 Groupes")
+        self.notebook.add(self.tab_parametres, text="⚙️ Paramètres")
         
         self.setup_dashboard()
         self.setup_reservations()
         self.setup_salles()
         self.setup_enseignants()
         self.setup_groupes()
+        self.setup_parametres()
         
         # Charger le module planning
         from app.gui.schedule_ui import ScheduleFrame
@@ -182,3 +186,54 @@ class AdminDashboard(ttk.Frame):
             self.tree_groupes.delete(row)
         for g in ResourceService.get_all_groupes():
             self.tree_groupes.insert("", "end", values=(g.id, g.nom, g.effectif))
+
+    # --- Paramètres planning ---
+    def setup_parametres(self):
+        frame = ttk.Labelframe(self.tab_parametres, text="Planification", padding=15, bootstyle="secondary")
+        frame.pack(fill="x", pady=(0, 20))
+
+        # Jours actifs
+        ttk.Label(frame, text="Jours actifs (0=Lundi ... 6=Dimanche, séparés par des virgules)").pack(anchor="w")
+        self.setting_work_days = ttk.Entry(frame, width=40)
+        self.setting_work_days.pack(fill="x", pady=(0, 10))
+        self.setting_work_days.insert(0, ", ".join(str(d) for d in SchoolSettingsService.get_working_days()))
+
+        # Créneaux actifs
+        ttk.Label(frame, text="Créneaux (HH:MM, séparés par des virgules)").pack(anchor="w")
+        slot_times = SchoolSettingsService.get_slot_times()
+        self.setting_slot_times = ttk.Entry(frame, width=40)
+        self.setting_slot_times.pack(fill="x", pady=(0, 10))
+        self.setting_slot_times.insert(0, ", ".join(t.strftime("%H:%M") for t in slot_times))
+
+        # Durée des créneaux
+        ttk.Label(frame, text="Durée d'un créneau (minutes)").pack(anchor="w")
+        self.setting_slot_duration = ttk.Entry(frame, width=15)
+        self.setting_slot_duration.pack(anchor="w", pady=(0, 10))
+        self.setting_slot_duration.insert(0, str(SchoolSettingsService.get_slot_duration_minutes()))
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill="x", pady=(5, 0))
+        ttk.Button(btn_frame, text="💾 Enregistrer les paramètres", command=self.save_planning_parameters, bootstyle="success").pack(side="left", padx=(0, 8))
+        ttk.Button(btn_frame, text="🔄 Recharger", command=self.refresh_parameters_view, bootstyle="info").pack(side="left")
+
+        self.refresh_parameters_view()
+
+    def refresh_parameters_view(self):
+        self.setting_work_days.delete(0, "end")
+        self.setting_slot_times.delete(0, "end")
+        self.setting_slot_duration.delete(0, "end")
+
+        self.setting_work_days.insert(0, ", ".join(str(d) for d in SchoolSettingsService.get_working_days()))
+        self.setting_slot_times.insert(0, ", ".join(t.strftime("%H:%M") for t in SchoolSettingsService.get_slot_times()))
+        self.setting_slot_duration.insert(0, str(SchoolSettingsService.get_slot_duration_minutes()))
+
+    def save_planning_parameters(self):
+        work_days = self.setting_work_days.get().strip()
+        slot_times = self.setting_slot_times.get().strip()
+        slot_duration = self.setting_slot_duration.get().strip()
+        try:
+            SchoolSettingsService.set_planning_settings(work_days, slot_times, slot_duration)
+            messagebox.showinfo("Succès", "Paramètres planification enregistrés.")
+            self.refresh_parameters_view()
+        except Exception as exc:
+            messagebox.showerror("Erreur", str(exc))

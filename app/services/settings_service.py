@@ -88,6 +88,21 @@ class SchoolSettingsService:
             return int(cls.DEFAULT_SLOT_DURATION_MINUTES)
 
     @classmethod
+    def set_planning_settings(cls, working_days: str, slot_times: str, slot_duration: str) -> None:
+        cls._validate_working_days(working_days)
+        normalized_slot_times = cls._validate_slot_times(slot_times)
+        try:
+            duration = int(slot_duration)
+        except ValueError as exc:
+            raise ValueError("La durée d'un créneau doit être un entier.") from exc
+        if duration <= 0:
+            raise ValueError("La durée du créneau doit être supérieure à 0.")
+
+        cls.set_value("school.work_days", ",".join(str(d) for d in cls._parse_working_days(working_days)))
+        cls.set_value("school.slot_times", ",".join(normalized_slot_times))
+        cls.set_value("school.slot_duration_minutes", str(duration))
+
+    @classmethod
     def get_day_name(cls, day_index: int) -> str:
         if 0 <= day_index < len(cls.DAY_NAMES):
             return cls.DAY_NAMES[day_index]
@@ -100,3 +115,40 @@ class SchoolSettingsService:
     @classmethod
     def _exists(cls, key: str) -> bool:
         return db.session.query(SchoolSetting).filter_by(key=key).first() is not None
+
+    @classmethod
+    def _parse_working_days(cls, raw: str) -> List[int]:
+        days = []
+        for item in raw.split(","):
+            item = item.strip()
+            if item:
+                try:
+                    value = int(item)
+                except ValueError:
+                    continue
+                if 0 <= value <= 6:
+                    days.append(value)
+        if not days:
+            raise ValueError("Aucun jour valide détecté.")
+        return sorted(set(days))
+
+    @classmethod
+    def _validate_working_days(cls, raw: str) -> None:
+        cls._parse_working_days(raw)
+
+    @classmethod
+    def _validate_slot_times(cls, raw: str) -> List[str]:
+        slots = []
+        for item in raw.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            try:
+                hour, minute = item.split(":")
+                parsed = time(int(hour), int(minute))
+            except Exception as exc:
+                raise ValueError("Le format des créneaux doit être HH:MM séparés par des virgules.") from exc
+            slots.append(parsed.strftime("%H:%M"))
+        if not slots:
+            raise ValueError("Aucun créneau valide détecté.")
+        return slots
