@@ -108,7 +108,11 @@ class ScheduleFrame(ttk.Frame):
             self.tree.insert("", "end", values=(jour, heure, matiere, groupe, salle, prof))
 
     def get_seances_data(self):
-        query = db.session.query(Seance).filter(Seance.heure_debut != None).order_by(Seance.jour_semaine, Seance.heure_debut)
+        query = (
+            SchedulerService.query_planifiable_seances()
+            .filter(Seance.heure_debut != None)
+            .order_by(Seance.jour_semaine, Seance.heure_debut)
+        )
         if self.role == "enseignant":
             query = query.filter(Seance.enseignant_id == self.filter_id)
         elif self.role == "etudiant":

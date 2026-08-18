@@ -6,7 +6,10 @@ la programmation par contraintes (Constraint Programming).
 """
 
 from ortools.sat.python import cp_model
-from app.models import Seance, Salle, Utilisateur, Groupe, Indisponibilite
+from sqlalchemy import and_, or_
+
+from app.models import AcademicCycle, AcademicLevel, Filiere, Groupe, Indisponibilite, Salle, Seance, Utilisateur
+from app.services.academic_structure_service import AcademicStructureService
 from app.services.settings_service import SchoolSettingsService
 from app.extensions import db
 from datetime import time, timedelta, date
@@ -50,6 +53,37 @@ class SchedulerService:
         return slots
 
     @staticmethod
+    def query_planifiable_seances():
+        """Return lessons that belong to the operational academic year."""
+        active_year = AcademicStructureService.get_active_year()
+        query = db.session.query(Seance)
+        if active_year is None:
+            return query
+
+        return (
+            query.join(Groupe, Seance.groupe_id == Groupe.id)
+            .join(Filiere, Groupe.filiere_id == Filiere.id)
+            .outerjoin(AcademicLevel, Filiere.academic_level_id == AcademicLevel.id)
+            .outerjoin(AcademicCycle, AcademicLevel.academic_cycle_id == AcademicCycle.id)
+            .filter(
+                or_(Groupe.school_year_id == active_year.id, Groupe.school_year_id.is_(None)),
+                Groupe.actif.is_(True),
+                Groupe.archive.is_(False),
+                Filiere.actif.is_(True),
+                Filiere.archive.is_(False),
+                or_(
+                    Filiere.academic_level_id.is_(None),
+                    and_(
+                        AcademicLevel.actif.is_(True),
+                        AcademicLevel.archive.is_(False),
+                        AcademicCycle.actif.is_(True),
+                        AcademicCycle.archive.is_(False),
+                    ),
+                ),
+            )
+        )
+
+    @staticmethod
     def generate_schedule():
         """
         Génère l'emploi du temps pour toutes les séances non planifiées (ou toutes).
@@ -58,7 +92,7 @@ class SchedulerService:
         model = cp_model.CpModel()
         
         # 1. Récupération des données
-        seances = db.session.query(Seance).all() # On replanifie tout pour l'instant
+        seances = SchedulerService.query_planifiable_seances().all()
         salles = db.session.query(Salle).all()
         # Filtrer les séances qui doivent être planifiées (ex: pas de date spécifique fixée manuellement ?)
         # Pour simplifier, on prend toutes les séances de type cours/td/tp sans date spécifique
