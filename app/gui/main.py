@@ -9,6 +9,9 @@ from app.gui.admin import AdminDashboard
 from app.gui.teacher import TeacherDashboard
 from app.gui.student import StudentDashboard
 from app.services.settings_service import SchoolSettingsService
+from app.services.academic_structure_migration_service import (
+    AcademicStructureMigrationService,
+)
 
 class DesktopApp:
     def __init__(self, root):
@@ -34,7 +37,7 @@ class DesktopApp:
         """Crée les tables et vérifie l'état initial de l'installation."""
         startup_hint = None
         try:
-            db.create_all()
+            AcademicStructureMigrationService.ensure_schema()
             SchoolSettingsService.seed_default_settings()
 
             user_count = db.session.query(Utilisateur).count()

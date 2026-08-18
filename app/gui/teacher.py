@@ -6,6 +6,7 @@ from app.gui.schedule_ui import ScheduleFrame
 from app.models import Reservation, Indisponibilite, Salle
 from app.extensions import db
 from app.services.room_service import get_free_salles
+from app.services.settings_service import SchoolSettingsService
 from datetime import datetime, date
 
 class TeacherDashboard(ttk.Frame):
@@ -97,6 +98,12 @@ class TeacherDashboard(ttk.Frame):
             date_obj = self._parse_date(date_str)
             start = datetime.strptime(self.res_start.get(), "%H:%M").time()
             end = datetime.strptime(self.res_end.get(), "%H:%M").time()
+            SchoolSettingsService.validate_teacher_reservation_request(
+                self.user.id,
+                date_obj,
+                start,
+                end,
+            )
             salle_str = self.res_salle.get()
             if not salle_str: raise ValueError("Choisir une salle")
             salle_id = int(salle_str.split(":")[0])
@@ -215,3 +222,5 @@ class TeacherDashboard(ttk.Frame):
         inds = db.session.query(Indisponibilite).filter_by(enseignant_id=self.user.id).all()
         for i in inds:
             self.tree_ind.insert("", "end", values=(i.jour_semaine, f"{i.heure_debut}-{i.heure_fin}"))
+
+

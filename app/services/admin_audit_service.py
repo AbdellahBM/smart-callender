@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.extensions import db
@@ -36,7 +36,7 @@ class AdminAuditService:
     def purge_older_than(days: int):
         if days is None or days < 1:
             raise ValueError("La période de purge doit être supérieure ou égale à 1.")
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
         try:
             deleted = (
                 db.session.query(AdminActionLog)

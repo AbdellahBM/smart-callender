@@ -31,6 +31,9 @@ Scheduling classes manually in any educational institution often leads to:
 #### 👑 Administrator (Administration)
 - **Dashboard**: Real-time statistics (KPIs) on room usage and teacher workload.
 - **Resource Management**: Manage Rooms, Teachers, Classes/Groups, and Subjects.
+- **School Organisation**: Create and manage academic years, cycles, levels, streams, and classes directly from the desktop app.
+- **Academic-Year Control**: Activate one operational year at a time, archive or reopen historical structures, and clone a complete structure for the next school year.
+- **Safe Planning Scope**: Automatic generation, timetable display, and PDF export use the active academic year only. Archived structures stay in the database for traceability but are excluded from daily operations.
 - **Schedule Management**: 
   - One-click automatic schedule generation.
   - Visual grid view of all schedules.
@@ -100,27 +103,42 @@ pip install -r requirements.txt
 Run the seed script explicitly to initialize the database and demo entities:
 
 ```bash
-python seed.py
+python scripts/seed_db.py
 ```
 
 ⚠️ This script is intentional and destructive for local setup:
 it drops and recreates database tables to load demo data. Run it only once
 during bootstrap or in a maintenance window.
 
-### 5. Launch the Application
+At normal desktop-app startup, the database is upgraded safely when needed and
+an active academic year is created automatically. Existing data is preserved.
+
+### 5. Configure the School Organisation
+
+After logging in as administrator, open **Organisation scolaire** and configure:
+
+1. The current academic year, then activate it.
+2. Cycles such as Primaire, Collège, Lycée, and Baccalauréat.
+3. Levels, streams/sections, and the classes used by the scheduler.
+4. The next year by duplicating the current structure, optionally resetting class enrolment counts.
+
+Use archive/reopen instead of deleting a structure that has already been used
+for planning. Each administration action is recorded in the audit journal.
+
+### 6. Launch the Application
 ```bash
 python desktop_run.py
 ```
 
-### 6. Demo Credentials
+### 7. Demo Credentials
 
-If you ran `python seed.py`, you can log in with the following demo accounts:
+If you ran `python scripts/seed_db.py`, you can log in with the following demo accounts:
 
 | Role       | Email                      | Password  | Note                          |
 |------------|----------------------------|-----------|-------------------------------|
 | Admin      | `admin@school.edu`         | `password`| Administrator dashboard       |
 | Teacher    | `prof.math@school.edu`     | `password`| Math Teacher                  |
-| Student    | `student.grade10@school.edu`| `password`| 10th Grade Student            |
+| Student    | `student.2bac.sm@school.edu`| `password`| 2BAC Sciences Maths student   |
 
 ---
 

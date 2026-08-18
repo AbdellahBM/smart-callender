@@ -4,8 +4,18 @@ app/services/resource_service.py - Service de gestion des ressources
 Gère les opérations CRUD pour les Salles, Enseignants, Groupes, Matières, Filières.
 """
 
-from app.models import Salle, Groupe, Matiere, Filiere, Utilisateur
+from app.models import (
+    AcademicCycle,
+    AcademicLevel,
+    Filiere,
+    Groupe,
+    Matiere,
+    Salle,
+    Utilisateur,
+)
 from app.extensions import db
+from app.services.academic_structure_service import AcademicStructureService
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 
 class ResourceService:
@@ -78,6 +88,39 @@ class ResourceService:
     @staticmethod
     def get_all_groupes():
         return db.session.query(Groupe).join(Filiere).order_by(Filiere.nom, Groupe.nom).all()
+
+    @staticmethod
+    def get_groupes_for_active_year():
+        active_year = AcademicStructureService.get_active_year()
+        query = (
+            db.session.query(Groupe)
+            .join(Filiere)
+            .outerjoin(AcademicLevel, Filiere.academic_level_id == AcademicLevel.id)
+            .outerjoin(AcademicCycle, AcademicLevel.academic_cycle_id == AcademicCycle.id)
+            .filter(
+                Groupe.archive.is_(False),
+                Groupe.actif.is_(True),
+                Filiere.archive.is_(False),
+                Filiere.actif.is_(True),
+                or_(
+                    Filiere.academic_level_id.is_(None),
+                    (
+                        AcademicLevel.actif.is_(True)
+                        & AcademicLevel.archive.is_(False)
+                        & AcademicCycle.actif.is_(True)
+                        & AcademicCycle.archive.is_(False)
+                    ),
+                ),
+            )
+        )
+        if active_year:
+            query = query.filter(
+                or_(
+                    Groupe.school_year_id == active_year.id,
+                    Groupe.school_year_id.is_(None),
+                )
+            )
+        return query.order_by(Filiere.nom, Groupe.ordre, Groupe.nom).all()
 
     @staticmethod
     def update_groupe(groupe_id, data):
@@ -188,6 +231,59 @@ class ResourceService:
     @staticmethod
     def get_all_filieres():
         return db.session.query(Filiere).order_by(Filiere.nom).all()
+
+    @staticmethod
+    def get_filieres_for_active_year():
+        active_year = AcademicStructureService.get_active_year()
+        if active_year is None:
+            return []
+        return (
+            db.session.query(Filiere)
+            .join(AcademicLevel)
+            .join(AcademicCycle)
+            .filter(
+                AcademicCycle.school_year_id == active_year.id,
+                Filiere.actif.is_(True),
+                Filiere.archive.is_(False),
+                AcademicLevel.actif.is_(True),
+                AcademicLevel.archive.is_(False),
+                AcademicCycle.actif.is_(True),
+                AcademicCycle.archive.is_(False),
+            )
+            .order_by(AcademicLevel.ordre, Filiere.ordre, Filiere.nom)
+            .all()
+        )
+
+    @staticmethod
+    def get_levels_for_active_year():
+        active_year = AcademicStructureService.get_active_year()
+        if active_year is None:
+            return []
+        return (
+            db.session.query(AcademicLevel)
+            .join(AcademicCycle)
+            .filter(
+                AcademicCycle.school_year_id == active_year.id,
+                AcademicLevel.actif.is_(True),
+                AcademicLevel.archive.is_(False),
+                AcademicCycle.actif.is_(True),
+                AcademicCycle.archive.is_(False),
+            )
+            .order_by(AcademicCycle.ordre, AcademicLevel.ordre, AcademicLevel.nom)
+            .all()
+        )
+
+    @staticmethod
+    def get_cycles_for_active_year():
+        active_year = AcademicStructureService.get_active_year()
+        if active_year is None:
+            return []
+        return (
+            db.session.query(AcademicCycle)
+            .filter_by(school_year_id=active_year.id, actif=True, archive=False)
+            .order_by(AcademicCycle.ordre, AcademicCycle.nom)
+            .all()
+        )
 
     @staticmethod
     def update_filiere(filiere_id, data):
