@@ -1,6 +1,10 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from flask_login import UserMixin
 from app.extensions import db, bcrypt
+
+
+def utc_now():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class Utilisateur(UserMixin, db.Model):
@@ -18,7 +22,7 @@ class Utilisateur(UserMixin, db.Model):
     prenom = db.Column(db.String(80), nullable=False)
     role = db.Column(db.String(20), nullable=False, default="etudiant")
     actif = db.Column(db.Boolean, default=True)
-    date_creation = db.Column(db.DateTime, default=datetime.utcnow)
+    date_creation = db.Column(db.DateTime, default=utc_now)
 
     # Relations selon le rôle
     groupe_id = db.Column(db.Integer, db.ForeignKey("groupes.id"), nullable=True)  # Étudiant

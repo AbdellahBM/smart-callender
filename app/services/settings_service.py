@@ -3,6 +3,7 @@ from typing import List
 
 from app.extensions import db
 from app.models import Reservation, SchoolSetting
+from app.services.academic_structure_service import AcademicStructureService
 
 
 class SchoolSettingsService:
@@ -26,12 +27,17 @@ class SchoolSettingsService:
 
     @classmethod
     def seed_default_settings(cls) -> None:
+        active_year = AcademicStructureService.get_active_year()
         defaults = {
             "school.work_days": cls.DEFAULT_WORKING_DAYS,
             "school.slot_times": cls.DEFAULT_SLOT_TIMES,
             "school.slot_duration_minutes": cls.DEFAULT_SLOT_DURATION_MINUTES,
             "school.name": cls.DEFAULT_SCHOOL_NAME,
-            "school.academic_year": cls.DEFAULT_ACADEMIC_YEAR or cls._default_academic_year(),
+            "school.academic_year": (
+                active_year.libelle
+                if active_year is not None
+                else cls.DEFAULT_ACADEMIC_YEAR or cls._default_academic_year()
+            ),
             "school.term_start": cls.DEFAULT_TERM_START,
             "school.term_end": cls.DEFAULT_TERM_END,
             "school.holidays": cls.DEFAULT_HOLIDAYS,
@@ -43,6 +49,8 @@ class SchoolSettingsService:
             if not cls._exists(key):
                 setting = SchoolSetting(key=key, value=value)
                 db.session.add(setting)
+        if active_year is not None:
+            cls._set_value_without_commit("school.academic_year", active_year.libelle)
         db.session.commit()
 
     @classmethod
@@ -337,6 +345,14 @@ class SchoolSettingsService:
     @classmethod
     def _exists(cls, key: str) -> bool:
         return db.session.query(SchoolSetting).filter_by(key=key).first() is not None
+
+    @classmethod
+    def _set_value_without_commit(cls, key: str, value: str) -> None:
+        setting = db.session.query(SchoolSetting).filter_by(key=key).first()
+        if setting is None:
+            db.session.add(SchoolSetting(key=key, value=value))
+        else:
+            setting.value = value
 
     @classmethod
     def _parse_working_days(cls, raw: str) -> List[int]:

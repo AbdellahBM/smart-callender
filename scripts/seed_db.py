@@ -1,10 +1,22 @@
-import os
+from datetime import date
+
 from app import create_app
 from app.extensions import db, bcrypt
-from app.models import Utilisateur, Salle, Matiere, Filiere, Groupe, Seance
+from app.models import (
+    AcademicCycle,
+    AcademicLevel,
+    AcademicYear,
+    Filiere,
+    Groupe,
+    Matiere,
+    Salle,
+    Seance,
+    Utilisateur,
+)
+from app.services.settings_service import SchoolSettingsService
 
-def seed():
-    app = create_app("development")
+def seed(app=None):
+    app = app or create_app("development")
     with app.app_context():
         print("ATTENTION: ce script est un seed d'initialisation.")
         print("Il réinitialise la base (suppression et recréation complète des tables).")
@@ -12,6 +24,56 @@ def seed():
         db.drop_all()
         print("Création des tables...")
         db.create_all()
+
+        current_year = date.today().year
+        academic_year = AcademicYear(
+            libelle=f"{current_year}-{current_year + 1}",
+            actif=True,
+        )
+        db.session.add(academic_year)
+        db.session.flush()
+
+        college_cycle = AcademicCycle(
+            school_year=academic_year,
+            nom="Collège",
+            code="COL",
+            ordre=1,
+        )
+        lycee_cycle = AcademicCycle(
+            school_year=academic_year,
+            nom="Lycée",
+            code="LYC",
+            ordre=2,
+        )
+        db.session.add_all([college_cycle, lycee_cycle])
+        db.session.flush()
+
+        level_college = AcademicLevel(
+            academic_cycle=college_cycle,
+            nom="3ème Année Collège",
+            code="3AC",
+            ordre=1,
+        )
+        level_tc = AcademicLevel(
+            academic_cycle=lycee_cycle,
+            nom="Tronc Commun",
+            code="TC",
+            ordre=1,
+        )
+        level_1bac = AcademicLevel(
+            academic_cycle=lycee_cycle,
+            nom="1ère Année Baccalauréat",
+            code="1BAC",
+            ordre=2,
+        )
+        level_2bac = AcademicLevel(
+            academic_cycle=lycee_cycle,
+            nom="2ème Année Baccalauréat",
+            code="2BAC",
+            ordre=3,
+        )
+        db.session.add_all([level_college, level_tc, level_1bac, level_2bac])
+        db.session.flush()
         
         # --- ADMIN ---
         print("Création de l'administrateur...")
@@ -26,10 +88,10 @@ def seed():
 
         # --- FILIERES / NIVEAUX ---
         print("Création des niveaux/filières...")
-        f_tc = Filiere(nom="Tronc Commun", code="TC")
-        f_1bac = Filiere(nom="1ère Année Baccalauréat", code="1BAC")
-        f_2bac = Filiere(nom="2ème Année Baccalauréat", code="2BAC")
-        f_college = Filiere(nom="Collège (3ème Année)", code="3AC")
+        f_tc = Filiere(nom="Tronc Commun", code="TC", academic_level=level_tc)
+        f_1bac = Filiere(nom="1ère Année Baccalauréat", code="1BAC", academic_level=level_1bac)
+        f_2bac = Filiere(nom="2ème Année Baccalauréat", code="2BAC", academic_level=level_2bac)
+        f_college = Filiere(nom="Collège (3ème Année)", code="3AC", academic_level=level_college)
         
         db.session.add_all([f_tc, f_1bac, f_2bac, f_college])
         db.session.flush()
@@ -37,21 +99,21 @@ def seed():
         # --- GROUPES / CLASSES ---
         print("Création des classes...")
         # 2BAC - Effectifs de terminale
-        g_2bac_sm = Groupe(nom="2BAC Sciences Maths", effectif=30, filiere=f_2bac)
-        g_2bac_pc = Groupe(nom="2BAC Physique Chimie", effectif=35, filiere=f_2bac)
-        g_2bac_svt = Groupe(nom="2BAC SVT", effectif=38, filiere=f_2bac)
+        g_2bac_sm = Groupe(nom="2BAC Sciences Maths", effectif=30, filiere=f_2bac, school_year=academic_year)
+        g_2bac_pc = Groupe(nom="2BAC Physique Chimie", effectif=35, filiere=f_2bac, school_year=academic_year)
+        g_2bac_svt = Groupe(nom="2BAC SVT", effectif=38, filiere=f_2bac, school_year=academic_year)
 
         # 1BAC
-        g_1bac_sm = Groupe(nom="1BAC Sciences Maths", effectif=32, filiere=f_1bac)
-        g_1bac_exp = Groupe(nom="1BAC Sciences Exp.", effectif=40, filiere=f_1bac)
+        g_1bac_sm = Groupe(nom="1BAC Sciences Maths", effectif=32, filiere=f_1bac, school_year=academic_year)
+        g_1bac_exp = Groupe(nom="1BAC Sciences Exp.", effectif=40, filiere=f_1bac, school_year=academic_year)
 
         # Tronc Commun
-        g_tc_sc1 = Groupe(nom="TC Sciences 1", effectif=45, filiere=f_tc)
-        g_tc_sc2 = Groupe(nom="TC Sciences 2", effectif=42, filiere=f_tc)
+        g_tc_sc1 = Groupe(nom="TC Sciences 1", effectif=45, filiere=f_tc, school_year=academic_year)
+        g_tc_sc2 = Groupe(nom="TC Sciences 2", effectif=42, filiere=f_tc, school_year=academic_year)
 
         # Collège (3ème)
-        g_3ac_1 = Groupe(nom="3ème Collège A", effectif=35, filiere=f_college)
-        g_3ac_2 = Groupe(nom="3ème Collège B", effectif=36, filiere=f_college)
+        g_3ac_1 = Groupe(nom="3ème Collège A", effectif=35, filiere=f_college, school_year=academic_year)
+        g_3ac_2 = Groupe(nom="3ème Collège B", effectif=36, filiere=f_college, school_year=academic_year)
 
         all_groupes = [
             g_2bac_sm, g_2bac_pc, g_2bac_svt,
@@ -177,6 +239,7 @@ def seed():
             e.set_password("password")
         db.session.add_all(etudiants)
 
+        SchoolSettingsService.seed_default_settings()
         db.session.commit()
         nb_seances = len(seances_to_create)
         print(f"Base de données de l'école privée initialisée avec succès ! ({len(all_groupes)} classes, {len(profs)} professeurs, {len(etudiants)} comptes étudiants démo, {nb_seances} séances.)")
