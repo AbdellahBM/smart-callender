@@ -43,3 +43,19 @@ class TestAcademicStructureService(unittest.TestCase):
         self.assertEqual(1, result["niveaux_doublonnes"])
         self.assertEqual(1, result["filieres_doublonnes"])
         self.assertEqual(1, result["groupes_dupliques"])
+
+    def test_academic_entities_can_be_updated_and_archived_without_deletion(self):
+        academic_year = AcademicStructureService.create_year("2025-2026", None, None)
+        cycle = AcademicStructureService.create_cycle(academic_year.id, "Lycée", "LYC", 1)
+        level = AcademicStructureService.create_level(cycle.id, "1BAC", "1BAC", 1)
+        filiere = AcademicStructureService.create_filiere(level.id, "Sciences", "SCI")
+        groupe = AcademicStructureService.create_groupe(filiere.id, "1BAC A", 30, academic_year.id, ordre=4)
+
+        AcademicStructureService.update_cycle(cycle.id, "Lycée qualifiant", "LQ", 2)
+        AcademicStructureService.archive_groupe(groupe.id)
+
+        self.assertEqual("Lycée qualifiant", cycle.nom)
+        self.assertEqual("LQ", cycle.code)
+        self.assertEqual(2, cycle.ordre)
+        self.assertEqual(4, groupe.ordre)
+        self.assertTrue(groupe.archive)

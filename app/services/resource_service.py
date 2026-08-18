@@ -95,7 +95,23 @@ class ResourceService:
         query = (
             db.session.query(Groupe)
             .join(Filiere)
-            .filter(Groupe.archive.is_(False), Groupe.actif.is_(True))
+            .outerjoin(AcademicLevel, Filiere.academic_level_id == AcademicLevel.id)
+            .outerjoin(AcademicCycle, AcademicLevel.academic_cycle_id == AcademicCycle.id)
+            .filter(
+                Groupe.archive.is_(False),
+                Groupe.actif.is_(True),
+                Filiere.archive.is_(False),
+                Filiere.actif.is_(True),
+                or_(
+                    Filiere.academic_level_id.is_(None),
+                    (
+                        AcademicLevel.actif.is_(True)
+                        & AcademicLevel.archive.is_(False)
+                        & AcademicCycle.actif.is_(True)
+                        & AcademicCycle.archive.is_(False)
+                    ),
+                ),
+            )
         )
         if active_year:
             query = query.filter(
@@ -229,6 +245,10 @@ class ResourceService:
                 AcademicCycle.school_year_id == active_year.id,
                 Filiere.actif.is_(True),
                 Filiere.archive.is_(False),
+                AcademicLevel.actif.is_(True),
+                AcademicLevel.archive.is_(False),
+                AcademicCycle.actif.is_(True),
+                AcademicCycle.archive.is_(False),
             )
             .order_by(AcademicLevel.ordre, Filiere.ordre, Filiere.nom)
             .all()
@@ -246,6 +266,8 @@ class ResourceService:
                 AcademicCycle.school_year_id == active_year.id,
                 AcademicLevel.actif.is_(True),
                 AcademicLevel.archive.is_(False),
+                AcademicCycle.actif.is_(True),
+                AcademicCycle.archive.is_(False),
             )
             .order_by(AcademicCycle.ordre, AcademicLevel.ordre, AcademicLevel.nom)
             .all()

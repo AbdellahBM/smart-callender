@@ -2,14 +2,23 @@ import csv
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from tkinter import BooleanVar, filedialog, messagebox, simpledialog
-from datetime import datetime
+from datetime import date, datetime
 from app.services.resource_service import ResourceService
 from app.services.auth_service import AuthService
 from app.services.admin_audit_service import AdminAuditService
 from app.extensions import db
-from app.models import Reservation, Utilisateur
+from app.models import (
+    AcademicCycle,
+    AcademicLevel,
+    AcademicYear,
+    Filiere,
+    Groupe,
+    Reservation,
+    Utilisateur,
+)
 from app.services.room_service import get_occupied_salle_ids
 from app.services.settings_service import SchoolSettingsService
+from app.services.academic_structure_service import AcademicStructureService
 
 class AdminDashboard(ttk.Frame):
     def __init__(self, parent, controller, user):
@@ -33,6 +42,7 @@ class AdminDashboard(ttk.Frame):
         self.tab_salles = ttk.Frame(self.notebook, padding=10)
         self.tab_enseignants = ttk.Frame(self.notebook, padding=10)
         self.tab_groupes = ttk.Frame(self.notebook, padding=10)
+        self.tab_organisation = ttk.Frame(self.notebook, padding=10)
         self.tab_planning = ttk.Frame(self.notebook, padding=10)
         self.tab_parametres = ttk.Frame(self.notebook, padding=10)
         self.tab_utilisateurs = ttk.Frame(self.notebook, padding=10)
@@ -45,6 +55,7 @@ class AdminDashboard(ttk.Frame):
         self.notebook.add(self.tab_salles, text="🏢 Salles")
         self.notebook.add(self.tab_enseignants, text="👨‍🏫 Enseignants")
         self.notebook.add(self.tab_groupes, text="🎓 Groupes")
+        self.notebook.add(self.tab_organisation, text="🏫 Organisation scolaire")
         self.notebook.add(self.tab_utilisateurs, text="👥 Utilisateurs")
         self.notebook.add(self.tab_classes, text="📘 Filières / Matières")
         self.notebook.add(self.tab_parametres, text="⚙️ Paramètres")
@@ -55,6 +66,7 @@ class AdminDashboard(ttk.Frame):
         self.setup_salles()
         self.setup_enseignants()
         self.setup_groupes()
+        self.setup_organisation()
         self.setup_utilisateurs()
         self.setup_classes()
         self.setup_parametres()
@@ -1413,3 +1425,488 @@ class AdminDashboard(ttk.Frame):
         except Exception as exc:
             messagebox.showerror("Erreur", str(exc))
 
+    # --- Organisation scolaire ---
+    def setup_organisation(self):
+        ttk.Label(
+            self.tab_organisation,
+            text="Organisation scolaire",
+            font=("Helvetica", 16, "bold"),
+            bootstyle="primary",
+        ).pack(anchor="w", pady=(0, 4))
+        ttk.Label(
+            self.tab_organisation,
+            text="Configurez les années, cycles, niveaux, filières et classes sans intervention technique.",
+        ).pack(anchor="w", pady=(0, 12))
+
+        self.organisation_notebook = ttk.Notebook(self.tab_organisation)
+        self.organisation_notebook.pack(expand=True, fill="both")
+        self.tab_academic_years = ttk.Frame(self.organisation_notebook, padding=10)
+        self.tab_academic_cycles = ttk.Frame(self.organisation_notebook, padding=10)
+        self.tab_academic_levels = ttk.Frame(self.organisation_notebook, padding=10)
+        self.tab_academic_classes = ttk.Frame(self.organisation_notebook, padding=10)
+        self.organisation_notebook.add(self.tab_academic_years, text="Années scolaires")
+        self.organisation_notebook.add(self.tab_academic_cycles, text="Cycles")
+        self.organisation_notebook.add(self.tab_academic_levels, text="Niveaux")
+        self.organisation_notebook.add(self.tab_academic_classes, text="Filières et classes")
+
+        self.setup_academic_years_ui()
+        self.setup_cycles_ui()
+        self.setup_levels_ui()
+        self.setup_classes_ui()
+
+    def setup_academic_years_ui(self):
+        toolbar = ttk.Frame(self.tab_academic_years)
+        toolbar.pack(fill="x", pady=(0, 10))
+        ttk.Button(toolbar, text="Ajouter une année", command=self.add_academic_year, bootstyle="success").pack(side="left")
+        ttk.Button(toolbar, text="Activer", command=self.activate_year, bootstyle="primary").pack(side="left", padx=6)
+        ttk.Button(toolbar, text="Archiver / réouvrir", command=self.archive_year, bootstyle="warning").pack(side="left", padx=6)
+        ttk.Button(toolbar, text="Dupliquer vers une nouvelle année", command=self.clone_year_structure, bootstyle="info").pack(side="left", padx=6)
+        ttk.Button(toolbar, text="Rafraîchir", command=self.refresh_organisation, bootstyle="secondary").pack(side="right")
+
+        columns = ("id", "libelle", "debut", "fin", "statut", "archive")
+        self.tree_academic_years = ttk.Treeview(self.tab_academic_years, columns=columns, show="headings", bootstyle="primary")
+        for column, title in zip(columns, ("ID", "Année", "Début", "Fin", "Statut", "Archive")):
+            self.tree_academic_years.heading(column, text=title)
+        self.tree_academic_years.column("id", width=55)
+        self.tree_academic_years.column("libelle", width=160)
+        self.tree_academic_years.pack(expand=True, fill="both")
+        self.refresh_academic_years()
+
+    def setup_cycles_ui(self):
+        toolbar = ttk.Frame(self.tab_academic_cycles)
+        toolbar.pack(fill="x", pady=(0, 10))
+        ttk.Button(toolbar, text="Ajouter un cycle", command=self.add_organisation_cycle, bootstyle="success").pack(side="left")
+        ttk.Button(toolbar, text="Modifier", command=self.edit_selected_cycle, bootstyle="warning").pack(side="left", padx=6)
+        ttk.Button(toolbar, text="Archiver / réouvrir", command=self.archive_selected_cycle, bootstyle="danger").pack(side="left", padx=6)
+
+        columns = ("id", "nom", "code", "ordre", "statut")
+        self.tree_academic_cycles = ttk.Treeview(self.tab_academic_cycles, columns=columns, show="headings", bootstyle="info")
+        for column, title in zip(columns, ("ID", "Cycle", "Code", "Ordre", "Statut")):
+            self.tree_academic_cycles.heading(column, text=title)
+        self.tree_academic_cycles.column("id", width=55)
+        self.tree_academic_cycles.pack(expand=True, fill="both")
+        self.refresh_academic_cycles()
+
+    def setup_levels_ui(self):
+        toolbar = ttk.Frame(self.tab_academic_levels)
+        toolbar.pack(fill="x", pady=(0, 10))
+        ttk.Button(toolbar, text="Ajouter un niveau", command=self.add_organisation_level, bootstyle="success").pack(side="left")
+        ttk.Button(toolbar, text="Modifier", command=self.edit_selected_level, bootstyle="warning").pack(side="left", padx=6)
+        ttk.Button(toolbar, text="Archiver / réouvrir", command=self.archive_selected_level, bootstyle="danger").pack(side="left", padx=6)
+
+        columns = ("id", "nom", "cycle", "code", "ordre", "statut")
+        self.tree_academic_levels = ttk.Treeview(self.tab_academic_levels, columns=columns, show="headings", bootstyle="info")
+        for column, title in zip(columns, ("ID", "Niveau", "Cycle", "Code", "Ordre", "Statut")):
+            self.tree_academic_levels.heading(column, text=title)
+        self.tree_academic_levels.column("id", width=55)
+        self.tree_academic_levels.pack(expand=True, fill="both")
+        self.refresh_academic_levels()
+
+    def setup_classes_ui(self):
+        panes = ttk.PanedWindow(self.tab_academic_classes, orient="horizontal")
+        panes.pack(expand=True, fill="both")
+        streams_frame = ttk.Labelframe(panes, text="Filières / sections", padding=10, bootstyle="warning")
+        groups_frame = ttk.Labelframe(panes, text="Classes", padding=10, bootstyle="warning")
+        panes.add(streams_frame, weight=1)
+        panes.add(groups_frame, weight=1)
+
+        stream_toolbar = ttk.Frame(streams_frame)
+        stream_toolbar.pack(fill="x", pady=(0, 10))
+        ttk.Button(stream_toolbar, text="Ajouter", command=self.add_organisation_filiere, bootstyle="success").pack(side="left")
+        ttk.Button(stream_toolbar, text="Modifier", command=self.edit_selected_organisation_filiere, bootstyle="warning").pack(side="left", padx=6)
+        ttk.Button(stream_toolbar, text="Archiver / réouvrir", command=self.archive_selected_organisation_filiere, bootstyle="danger").pack(side="left", padx=6)
+        self.tree_organisation_filieres = ttk.Treeview(streams_frame, columns=("id", "nom", "niveau", "code", "ordre", "statut"), show="headings", bootstyle="warning")
+        for column, title in zip(("id", "nom", "niveau", "code", "ordre", "statut"), ("ID", "Filière", "Niveau", "Code", "Ordre", "Statut")):
+            self.tree_organisation_filieres.heading(column, text=title)
+        self.tree_organisation_filieres.column("id", width=55)
+        self.tree_organisation_filieres.pack(expand=True, fill="both")
+
+        group_toolbar = ttk.Frame(groups_frame)
+        group_toolbar.pack(fill="x", pady=(0, 10))
+        ttk.Button(group_toolbar, text="Ajouter", command=self.add_organisation_groupe, bootstyle="success").pack(side="left")
+        ttk.Button(group_toolbar, text="Modifier", command=self.edit_selected_organisation_groupe, bootstyle="warning").pack(side="left", padx=6)
+        ttk.Button(group_toolbar, text="Archiver / réouvrir", command=self.archive_selected_organisation_groupe, bootstyle="danger").pack(side="left", padx=6)
+        self.tree_organisation_groupes = ttk.Treeview(groups_frame, columns=("id", "nom", "filiere", "effectif", "ordre", "statut"), show="headings", bootstyle="warning")
+        for column, title in zip(("id", "nom", "filiere", "effectif", "ordre", "statut"), ("ID", "Classe", "Filière", "Effectif", "Ordre", "Statut")):
+            self.tree_organisation_groupes.heading(column, text=title)
+        self.tree_organisation_groupes.column("id", width=55)
+        self.tree_organisation_groupes.pack(expand=True, fill="both")
+        self.refresh_organisation_classes()
+
+    def refresh_organisation(self):
+        self.refresh_academic_years()
+        self.refresh_academic_cycles()
+        self.refresh_academic_levels()
+        self.refresh_organisation_classes()
+
+    def refresh_academic_years(self):
+        if not hasattr(self, "tree_academic_years"):
+            return
+        self._clear_tree(self.tree_academic_years)
+        for academic_year in db.session.query(AcademicYear).order_by(AcademicYear.libelle.desc()).all():
+            self.tree_academic_years.insert(
+                "",
+                "end",
+                values=(
+                    academic_year.id,
+                    academic_year.libelle,
+                    academic_year.date_debut.isoformat() if academic_year.date_debut else "",
+                    academic_year.date_fin.isoformat() if academic_year.date_fin else "",
+                    "Active" if academic_year.actif else "Inactive",
+                    "Oui" if academic_year.archive else "Non",
+                ),
+            )
+
+    def refresh_academic_cycles(self):
+        if not hasattr(self, "tree_academic_cycles"):
+            return
+        self._clear_tree(self.tree_academic_cycles)
+        active_year = AcademicStructureService.get_active_year()
+        if active_year is None:
+            return
+        cycles = db.session.query(AcademicCycle).filter_by(school_year_id=active_year.id).order_by(AcademicCycle.ordre, AcademicCycle.nom).all()
+        for cycle in cycles:
+            self.tree_academic_cycles.insert("", "end", values=(cycle.id, cycle.nom, cycle.code or "", cycle.ordre, self._organisation_status(cycle)))
+
+    def refresh_academic_levels(self):
+        if not hasattr(self, "tree_academic_levels"):
+            return
+        self._clear_tree(self.tree_academic_levels)
+        active_year = AcademicStructureService.get_active_year()
+        if active_year is None:
+            return
+        levels = (
+            db.session.query(AcademicLevel)
+            .join(AcademicCycle)
+            .filter(AcademicCycle.school_year_id == active_year.id)
+            .order_by(AcademicCycle.ordre, AcademicLevel.ordre, AcademicLevel.nom)
+            .all()
+        )
+        for level in levels:
+            cycle_name = level.academic_cycle.nom if level.academic_cycle else ""
+            self.tree_academic_levels.insert("", "end", values=(level.id, level.nom, cycle_name, level.code or "", level.ordre, self._organisation_status(level)))
+
+    def refresh_organisation_classes(self):
+        active_year = AcademicStructureService.get_active_year()
+        if hasattr(self, "tree_organisation_filieres"):
+            self._clear_tree(self.tree_organisation_filieres)
+        if hasattr(self, "tree_organisation_groupes"):
+            self._clear_tree(self.tree_organisation_groupes)
+        if active_year is None:
+            return
+        filieres = (
+            db.session.query(Filiere)
+            .join(AcademicLevel)
+            .join(AcademicCycle)
+            .filter(AcademicCycle.school_year_id == active_year.id)
+            .order_by(AcademicLevel.ordre, Filiere.ordre, Filiere.nom)
+            .all()
+        )
+        for filiere in filieres:
+            level_name = filiere.academic_level.nom if filiere.academic_level else ""
+            self.tree_organisation_filieres.insert("", "end", values=(filiere.id, filiere.nom, level_name, filiere.code or "", filiere.ordre, self._organisation_status(filiere)))
+        groupes = db.session.query(Groupe).filter_by(school_year_id=active_year.id).order_by(Groupe.ordre, Groupe.nom).all()
+        for groupe in groupes:
+            filiere_name = groupe.filiere.nom if groupe.filiere else ""
+            self.tree_organisation_groupes.insert("", "end", values=(groupe.id, groupe.nom, filiere_name, groupe.effectif, groupe.ordre, self._organisation_status(groupe)))
+
+    def add_academic_year(self):
+        label = simpledialog.askstring("Ajouter une année scolaire", "Libellé (ex: 2026-2027) :")
+        if label is None:
+            return
+        start_text = simpledialog.askstring("Ajouter une année scolaire", "Date de début (AAAA-MM-JJ, optionnel) :", initialvalue="")
+        if start_text is None:
+            return
+        end_text = simpledialog.askstring("Ajouter une année scolaire", "Date de fin (AAAA-MM-JJ, optionnel) :", initialvalue="")
+        if end_text is None:
+            return
+        try:
+            start_date = self._parse_organisation_date(start_text)
+            end_date = self._parse_organisation_date(end_text)
+            if start_date and end_date and end_date < start_date:
+                raise ValueError("La date de fin doit être postérieure à la date de début.")
+            academic_year = AcademicStructureService.create_year(label, start_date, end_date)
+            self._record_admin_action("academic_year.created", "academic_year", academic_year.id, f"libelle={academic_year.libelle}")
+            self.refresh_organisation()
+        except ValueError as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def activate_year(self):
+        values = self._selected_tree_values(self.tree_academic_years)
+        if not values:
+            messagebox.showwarning("Attention", "Sélectionnez une année scolaire.")
+            return
+        try:
+            academic_year = AcademicStructureService.set_active_year(int(values[0]))
+            self._record_admin_action("academic_year.activated", "academic_year", academic_year.id, f"libelle={academic_year.libelle}")
+            self.refresh_organisation()
+            messagebox.showinfo("Année active", f"{academic_year.libelle} est maintenant l'année scolaire active.")
+        except ValueError as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def archive_year(self):
+        values = self._selected_tree_values(self.tree_academic_years)
+        if not values:
+            messagebox.showwarning("Attention", "Sélectionnez une année scolaire.")
+            return
+        archive = str(values[5]) != "Oui"
+        action = "Archiver" if archive else "Réouvrir"
+        if not messagebox.askyesno("Confirmer", f"{action} l'année {values[1]} ?"):
+            return
+        try:
+            academic_year = AcademicStructureService.archive_year(int(values[0]), archive)
+            self._record_admin_action("academic_year.archived" if archive else "academic_year.reopened", "academic_year", academic_year.id, f"libelle={academic_year.libelle}")
+            self.refresh_organisation()
+        except ValueError as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def clone_year_structure(self):
+        values = self._selected_tree_values(self.tree_academic_years)
+        if not values:
+            messagebox.showwarning("Attention", "Sélectionnez l'année source à dupliquer.")
+            return
+        target_label = simpledialog.askstring("Dupliquer une année", "Libellé de la nouvelle année (ex: 2027-2028) :")
+        if target_label is None:
+            return
+        keep_effectif = messagebox.askyesno("Effectifs", "Conserver les effectifs des classes dans la nouvelle année ?")
+        try:
+            result = AcademicStructureService.clone_year_structure(int(values[0]), target_label, keep_effectif)
+            self._record_admin_action("academic_year.cloned", "academic_year", int(values[0]), f"cible={target_label}, {result}")
+            self.refresh_organisation()
+            messagebox.showinfo("Duplication terminée", f"{result['groupes_dupliques']} classe(s) dupliquée(s).")
+        except ValueError as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def add_organisation_cycle(self):
+        active_year = AcademicStructureService.get_active_year()
+        if active_year is None:
+            messagebox.showwarning("Attention", "Activez d'abord une année scolaire.")
+            return
+        values = self._ask_named_organisation_values("Ajouter un cycle")
+        if values is None:
+            return
+        try:
+            cycle = AcademicStructureService.create_cycle(active_year.id, *values)
+            self._record_admin_action("academic_cycle.created", "academic_cycle", cycle.id, f"nom={cycle.nom}")
+            self.refresh_organisation()
+        except ValueError as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def edit_selected_cycle(self):
+        values = self._selected_tree_values(self.tree_academic_cycles)
+        if not values:
+            messagebox.showwarning("Attention", "Sélectionnez un cycle.")
+            return
+        updated_values = self._ask_named_organisation_values("Modifier le cycle", values[1], values[2], values[3])
+        if updated_values is None:
+            return
+        try:
+            cycle = AcademicStructureService.update_cycle(int(values[0]), *updated_values)
+            self._record_admin_action("academic_cycle.updated", "academic_cycle", cycle.id, f"nom={cycle.nom}")
+            self.refresh_organisation()
+        except ValueError as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def archive_selected_cycle(self):
+        self._toggle_organisation_archive(self.tree_academic_cycles, AcademicStructureService.archive_cycle, "academic_cycle")
+
+    def add_organisation_level(self):
+        choices = self._available_cycle_choices()
+        if not choices:
+            messagebox.showwarning("Attention", "Créez d'abord un cycle non archivé.")
+            return
+        choice = simpledialog.askstring("Ajouter un niveau", f"Cycle (ID) : {', '.join(choices)}")
+        cycle_id = self._parse_choice_id(choice)
+        if cycle_id is None:
+            return
+        values = self._ask_named_organisation_values("Ajouter un niveau")
+        if values is None:
+            return
+        try:
+            level = AcademicStructureService.create_level(cycle_id, *values)
+            self._record_admin_action("academic_level.created", "academic_level", level.id, f"nom={level.nom}, cycle_id={cycle_id}")
+            self.refresh_organisation()
+        except ValueError as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def edit_selected_level(self):
+        values = self._selected_tree_values(self.tree_academic_levels)
+        if not values:
+            messagebox.showwarning("Attention", "Sélectionnez un niveau.")
+            return
+        updated_values = self._ask_named_organisation_values("Modifier le niveau", values[1], values[3], values[4])
+        if updated_values is None:
+            return
+        try:
+            level = AcademicStructureService.update_level(int(values[0]), *updated_values)
+            self._record_admin_action("academic_level.updated", "academic_level", level.id, f"nom={level.nom}")
+            self.refresh_organisation()
+        except ValueError as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def archive_selected_level(self):
+        self._toggle_organisation_archive(self.tree_academic_levels, AcademicStructureService.archive_level, "academic_level")
+
+    def add_organisation_filiere(self):
+        choices = self._available_level_choices()
+        if not choices:
+            messagebox.showwarning("Attention", "Créez d'abord un niveau non archivé.")
+            return
+        choice = simpledialog.askstring("Ajouter une filière", f"Niveau (ID) : {', '.join(choices)}")
+        level_id = self._parse_choice_id(choice)
+        if level_id is None:
+            return
+        values = self._ask_named_organisation_values("Ajouter une filière")
+        if values is None:
+            return
+        try:
+            filiere = AcademicStructureService.create_filiere(level_id, *values)
+            self._record_admin_action("filiere.created", "filiere", filiere.id, f"nom={filiere.nom}, level_id={level_id}")
+            self.refresh_organisation()
+        except ValueError as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def edit_selected_organisation_filiere(self):
+        values = self._selected_tree_values(self.tree_organisation_filieres)
+        if not values:
+            messagebox.showwarning("Attention", "Sélectionnez une filière.")
+            return
+        updated_values = self._ask_named_organisation_values("Modifier la filière", values[1], values[3], values[4])
+        if updated_values is None:
+            return
+        try:
+            filiere = AcademicStructureService.update_filiere(int(values[0]), *updated_values)
+            self._record_admin_action("filiere.updated", "filiere", filiere.id, f"nom={filiere.nom}")
+            self.refresh_organisation()
+        except ValueError as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def archive_selected_organisation_filiere(self):
+        self._toggle_organisation_archive(self.tree_organisation_filieres, AcademicStructureService.archive_filiere, "filiere")
+
+    def add_organisation_groupe(self):
+        active_year = AcademicStructureService.get_active_year()
+        choices = self._available_filiere_choices()
+        if active_year is None or not choices:
+            messagebox.showwarning("Attention", "Créez d'abord une filière non archivée dans l'année active.")
+            return
+        choice = simpledialog.askstring("Ajouter une classe", f"Filière (ID) : {', '.join(choices)}")
+        filiere_id = self._parse_choice_id(choice)
+        if filiere_id is None:
+            return
+        nom = simpledialog.askstring("Ajouter une classe", "Nom de la classe :")
+        if nom is None:
+            return
+        effectif = simpledialog.askinteger("Ajouter une classe", "Effectif :", initialvalue=0)
+        if effectif is None:
+            return
+        ordre = simpledialog.askinteger("Ajouter une classe", "Ordre d'affichage :", initialvalue=0)
+        if ordre is None:
+            return
+        try:
+            groupe = AcademicStructureService.create_groupe(filiere_id, nom, effectif, active_year.id, ordre)
+            self._record_admin_action("groupe.created", "groupe", groupe.id, f"nom={groupe.nom}, filiere_id={filiere_id}")
+            self.refresh_organisation()
+        except ValueError as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def edit_selected_organisation_groupe(self):
+        values = self._selected_tree_values(self.tree_organisation_groupes)
+        if not values:
+            messagebox.showwarning("Attention", "Sélectionnez une classe.")
+            return
+        nom = simpledialog.askstring("Modifier la classe", "Nom :", initialvalue=values[1])
+        if nom is None:
+            return
+        effectif = simpledialog.askinteger("Modifier la classe", "Effectif :", initialvalue=int(values[3]))
+        if effectif is None:
+            return
+        ordre = simpledialog.askinteger("Modifier la classe", "Ordre d'affichage :", initialvalue=int(values[4]))
+        if ordre is None:
+            return
+        try:
+            groupe = AcademicStructureService.update_groupe(int(values[0]), nom, effectif, ordre)
+            self._record_admin_action("groupe.updated", "groupe", groupe.id, f"nom={groupe.nom}")
+            self.refresh_organisation()
+        except ValueError as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    def archive_selected_organisation_groupe(self):
+        self._toggle_organisation_archive(self.tree_organisation_groupes, AcademicStructureService.archive_groupe, "groupe")
+
+    def _available_cycle_choices(self):
+        active_year = AcademicStructureService.get_active_year()
+        if active_year is None:
+            return []
+        return [f"{cycle.id}: {cycle.nom}" for cycle in db.session.query(AcademicCycle).filter_by(school_year_id=active_year.id, archive=False, actif=True).order_by(AcademicCycle.ordre).all()]
+
+    def _available_level_choices(self):
+        active_year = AcademicStructureService.get_active_year()
+        if active_year is None:
+            return []
+        levels = db.session.query(AcademicLevel).join(AcademicCycle).filter(AcademicCycle.school_year_id == active_year.id, AcademicCycle.archive.is_(False), AcademicLevel.archive.is_(False), AcademicCycle.actif.is_(True), AcademicLevel.actif.is_(True)).order_by(AcademicLevel.ordre).all()
+        return [f"{level.id}: {level.nom}" for level in levels]
+
+    def _available_filiere_choices(self):
+        active_year = AcademicStructureService.get_active_year()
+        if active_year is None:
+            return []
+        filieres = db.session.query(Filiere).join(AcademicLevel).join(AcademicCycle).filter(AcademicCycle.school_year_id == active_year.id, AcademicCycle.archive.is_(False), AcademicLevel.archive.is_(False), Filiere.archive.is_(False), AcademicCycle.actif.is_(True), AcademicLevel.actif.is_(True), Filiere.actif.is_(True)).order_by(Filiere.ordre, Filiere.nom).all()
+        return [f"{filiere.id}: {filiere.nom}" for filiere in filieres]
+
+    def _ask_named_organisation_values(self, title, nom="", code="", ordre=0):
+        nom = simpledialog.askstring(title, "Nom :", initialvalue=nom)
+        if nom is None:
+            return None
+        code = simpledialog.askstring(title, "Code (optionnel) :", initialvalue=code)
+        if code is None:
+            return None
+        ordre = simpledialog.askinteger(title, "Ordre d'affichage :", initialvalue=int(ordre or 0))
+        if ordre is None:
+            return None
+        return nom, code, ordre
+
+    def _toggle_organisation_archive(self, tree, archive_method, entity_type):
+        values = self._selected_tree_values(tree)
+        if not values:
+            messagebox.showwarning("Attention", "Sélectionnez un élément.")
+            return
+        archive = str(values[-1]) != "Archivé"
+        action = "Archiver" if archive else "Réouvrir"
+        if not messagebox.askyesno("Confirmer", f"{action} {values[1]} ?"):
+            return
+        try:
+            entity = archive_method(int(values[0]), archive)
+            self._record_admin_action(f"{entity_type}.archived" if archive else f"{entity_type}.reopened", entity_type, entity.id, f"nom={entity.nom}")
+            self.refresh_organisation()
+        except ValueError as exc:
+            messagebox.showerror("Erreur", str(exc))
+
+    @staticmethod
+    def _clear_tree(tree):
+        for row in tree.get_children():
+            tree.delete(row)
+
+    @staticmethod
+    def _organisation_status(entity):
+        return "Archivé" if entity.archive else "Actif" if entity.actif else "Inactif"
+
+    @staticmethod
+    def _parse_organisation_date(raw_value):
+        value = (raw_value or "").strip()
+        if not value:
+            return None
+        try:
+            return date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("Les dates doivent être au format AAAA-MM-JJ.") from exc
+
+    @staticmethod
+    def _parse_choice_id(choice):
+        if not choice:
+            return None
+        try:
+            return int(choice.split(":", 1)[0].strip())
+        except ValueError:
+            messagebox.showerror("Erreur", "L'ID sélectionné est invalide.")
+            return None

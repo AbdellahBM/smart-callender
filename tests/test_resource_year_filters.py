@@ -43,3 +43,10 @@ class TestResourceYearFilters(unittest.TestCase):
             ["1BAC A"],
             [groupe.nom for groupe in ResourceService.get_groupes_for_active_year()],
         )
+
+        AcademicStructureService.archive_cycle(second_cycle.id)
+
+        self.assertEqual([], ResourceService.get_cycles_for_active_year())
+        self.assertEqual([], ResourceService.get_levels_for_active_year())
+        self.assertEqual([], ResourceService.get_filieres_for_active_year())
+        self.assertEqual([], ResourceService.get_groupes_for_active_year())

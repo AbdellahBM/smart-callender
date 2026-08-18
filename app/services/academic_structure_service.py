@@ -90,7 +90,7 @@ class AcademicStructureService:
         return filiere
 
     @staticmethod
-    def create_groupe(filiere_id, nom, effectif, school_year_id):
+    def create_groupe(filiere_id, nom, effectif, school_year_id, ordre=0):
         AcademicStructureService._get_required(Filiere, filiere_id, "Filière invalide.")
         AcademicStructureService._get_required(AcademicYear, school_year_id, "Année invalide.")
         groupe = Groupe(
@@ -98,10 +98,84 @@ class AcademicStructureService:
             nom=AcademicStructureService._required_name(nom, "Le nom de la classe est obligatoire."),
             effectif=int(effectif or 0),
             school_year_id=int(school_year_id),
+            ordre=int(ordre or 0),
         )
         db.session.add(groupe)
         db.session.commit()
         return groupe
+
+    @staticmethod
+    def update_cycle(cycle_id, nom, code=None, ordre=0):
+        return AcademicStructureService._update_named_entity(
+            AcademicCycle,
+            cycle_id,
+            nom,
+            code,
+            ordre,
+            "Cycle invalide.",
+            "Le nom du cycle est obligatoire.",
+        )
+
+    @staticmethod
+    def update_level(level_id, nom, code=None, ordre=0):
+        return AcademicStructureService._update_named_entity(
+            AcademicLevel,
+            level_id,
+            nom,
+            code,
+            ordre,
+            "Niveau invalide.",
+            "Le nom du niveau est obligatoire.",
+        )
+
+    @staticmethod
+    def update_filiere(filiere_id, nom, code=None, ordre=0):
+        return AcademicStructureService._update_named_entity(
+            Filiere,
+            filiere_id,
+            nom,
+            code,
+            ordre,
+            "Filière invalide.",
+            "Le nom de la filière est obligatoire.",
+        )
+
+    @staticmethod
+    def update_groupe(groupe_id, nom, effectif, ordre=0):
+        groupe = AcademicStructureService._get_required(
+            Groupe, groupe_id, "Classe invalide."
+        )
+        groupe.nom = AcademicStructureService._required_name(
+            nom, "Le nom de la classe est obligatoire."
+        )
+        groupe.effectif = int(effectif or 0)
+        groupe.ordre = int(ordre or 0)
+        db.session.commit()
+        return groupe
+
+    @staticmethod
+    def archive_cycle(cycle_id, archive=True):
+        return AcademicStructureService._set_archive(
+            AcademicCycle, cycle_id, archive, "Cycle invalide."
+        )
+
+    @staticmethod
+    def archive_level(level_id, archive=True):
+        return AcademicStructureService._set_archive(
+            AcademicLevel, level_id, archive, "Niveau invalide."
+        )
+
+    @staticmethod
+    def archive_filiere(filiere_id, archive=True):
+        return AcademicStructureService._set_archive(
+            Filiere, filiere_id, archive, "Filière invalide."
+        )
+
+    @staticmethod
+    def archive_groupe(groupe_id, archive=True):
+        return AcademicStructureService._set_archive(
+            Groupe, groupe_id, archive, "Classe invalide."
+        )
 
     @staticmethod
     def clone_year_structure(source_year_id, target_libelle, keep_effectif=False):
@@ -184,6 +258,22 @@ class AcademicStructureService:
         if row is None:
             raise ValueError(message)
         return row
+
+    @staticmethod
+    def _update_named_entity(model, identifier, nom, code, ordre, invalid_message, name_message):
+        entity = AcademicStructureService._get_required(model, identifier, invalid_message)
+        entity.nom = AcademicStructureService._required_name(nom, name_message)
+        entity.code = AcademicStructureService._optional_code(code)
+        entity.ordre = int(ordre or 0)
+        db.session.commit()
+        return entity
+
+    @staticmethod
+    def _set_archive(model, identifier, archive, invalid_message):
+        entity = AcademicStructureService._get_required(model, identifier, invalid_message)
+        entity.archive = bool(archive)
+        db.session.commit()
+        return entity
 
     @staticmethod
     def _required_name(value, message):
